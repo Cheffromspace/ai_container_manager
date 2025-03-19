@@ -1,0 +1,370 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "mode": "button",
+        "buttonText": "Spin up AI Container",
+        "parentType": "multi-open",
+        "maxTabs": 5
+      },
+      "id": "start",
+      "name": "Button Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "mode": "button",
+        "buttonText": "Container Cleanup",
+        "parentType": "multi-open",
+        "maxTabs": 5
+      },
+      "id": "cleanup_trigger",
+      "name": "Cleanup Button",
+      "type": "n8n-nodes-base.manualTrigger",
+      "position": [200, 900]
+    },
+    {
+      "parameters": {
+        "url": "http://ai-container-manager:5000/api/cleanup",
+        "options": {
+          "method": "POST"
+        }
+      },
+      "id": "cleanup_request",
+      "name": "HTTP Request - Cleanup",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [500, 900]
+    },
+    {
+      "parameters": {
+        "message": "=## Container Cleanup Complete\n\nSuccessfully removed: {{$json[\"success_count\"]}} containers\nFailed: {{$json[\"fail_count\"]}} containers\n\n{{$json[\"message\"]}}"
+      },
+      "id": "cleanup_confirmation",
+      "name": "Cleanup Confirmation",
+      "type": "n8n-nodes-base.noOp",
+      "position": [800, 900]
+    },
+    {
+      "parameters": {
+        "mode": "button",
+        "buttonText": "Container Stats",
+        "parentType": "multi-open",
+        "maxTabs": 5
+      },
+      "id": "stats_trigger",
+      "name": "Stats Button",
+      "type": "n8n-nodes-base.manualTrigger",
+      "position": [200, 1100]
+    },
+    {
+      "parameters": {
+        "url": "http://ai-container-manager:5000/api/stats",
+        "options": {
+          "method": "GET"
+        }
+      },
+      "id": "stats_request",
+      "name": "HTTP Request - Stats",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [500, 1100]
+    },
+    {
+      "parameters": {
+        "mode": "mergeByPosition"
+      },
+      "id": "loop_containers",
+      "name": "Container Stats Loop",
+      "type": "n8n-nodes-base.splitInBatches",
+      "position": [800, 1100]
+    },
+    {
+      "parameters": {
+        "message": "=## Container Statistics\n\nTotal Active Containers: {{$json[\"active_count\"]}}\nContainer Expiry Time: {{$json[\"expiry_hours\"]}} hours\n\n### Active Containers\n{% for container in $json.containers %}\n- **ID**: `{{container.id}}` ({{container.name}})\n  - Age: {{container.age_hours}} hours\n  - Expires in: {{container.expires_in_hours}} hours\n{% endfor %}"
+      },
+      "id": "stats_display",
+      "name": "Stats Display",
+      "type": "n8n-nodes-base.noOp",
+      "position": [1100, 1100]
+    },
+    {
+      "parameters": {
+        "url": "http://ai-container-manager:5000/api/containers/create",
+        "options": {
+          "method": "POST"
+        }
+      },
+      "id": "create_container",
+      "name": "HTTP Request - Create Container",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [500, 300]
+    },
+    {
+      "parameters": {
+        "message": "=## AI Container Created!\n\nConnection details:\n\n**SSH Command**: `{{$json[\"ssh_command\"]}}`\n\n**Container ID**: `{{$json[\"id\"]}}`\n\nRemember to delete this container when you're done!"
+      },
+      "id": "notify",
+      "name": "Notify User",
+      "type": "n8n-nodes-base.noOp",
+      "position": [800, 300]
+    },
+    {
+      "parameters": {
+        "mode": "button",
+        "buttonText": "Delete Container",
+        "parentType": "multi-open",
+        "maxTabs": 5
+      },
+      "id": "delete_trigger",
+      "name": "Delete Button",
+      "type": "n8n-nodes-base.manualTrigger",
+      "position": [200, 500]
+    },
+    {
+      "parameters": {
+        "schema": {
+          "request": {
+            "allowUnknownPaths": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "container_id": {
+                  "type": "string",
+                  "title": "Container ID",
+                  "description": "Enter the ID of the container to delete"
+                }
+              },
+              "required": ["container_id"]
+            }
+          }
+        }
+      },
+      "id": "get_container_id",
+      "name": "Form Input",
+      "type": "n8n-nodes-base.formTrigger",
+      "position": [500, 500]
+    },
+    {
+      "parameters": {
+        "url": "=http://ai-container-manager:5000/api/containers/delete/{{$node[\"get_container_id\"].json[\"container_id\"]}}",
+        "options": {
+          "method": "DELETE"
+        }
+      },
+      "id": "delete_container",
+      "name": "HTTP Request - Delete Container",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [800, 500]
+    },
+    {
+      "parameters": {
+        "message": "=## Container Deleted\n\nContainer with ID `{{$node[\"get_container_id\"].json[\"container_id\"]}}` has been successfully deleted."
+      },
+      "id": "delete_confirmation",
+      "name": "Deletion Confirmation",
+      "type": "n8n-nodes-base.noOp",
+      "position": [1100, 500]
+    },
+    {
+      "parameters": {
+        "mode": "button",
+        "buttonText": "Run Command",
+        "parentType": "multi-open",
+        "maxTabs": 5
+      },
+      "id": "cmd_trigger",
+      "name": "Command Button",
+      "type": "n8n-nodes-base.manualTrigger",
+      "position": [200, 700]
+    },
+    {
+      "parameters": {
+        "schema": {
+          "request": {
+            "allowUnknownPaths": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "container_id": {
+                  "type": "string",
+                  "title": "Container ID",
+                  "description": "Enter the ID of the container"
+                },
+                "command": {
+                  "type": "string",
+                  "title": "Command",
+                  "description": "Enter the command to execute",
+                  "default": "ls -la"
+                }
+              },
+              "required": ["container_id", "command"]
+            }
+          }
+        }
+      },
+      "id": "get_command",
+      "name": "Command Input",
+      "type": "n8n-nodes-base.formTrigger",
+      "position": [500, 700]
+    },
+    {
+      "parameters": {
+        "url": "=http://ai-container-manager:5000/api/containers/exec/{{$node[\"get_command\"].json[\"container_id\"]}}",
+        "jsonParameters": true,
+        "options": {
+          "method": "POST",
+          "body": {
+            "command": "=/bin/bash -c '{{$node[\"get_command\"].json[\"command\"]}}'"
+          }
+        }
+      },
+      "id": "exec_command",
+      "name": "HTTP Request - Execute Command",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [800, 700]
+    },
+    {
+      "parameters": {
+        "message": "=## Command Output\n\nExit code: `{{$json[\"exit_code\"]}}`\n\n```\n{{$json[\"output\"]}}\n```"
+      },
+      "id": "cmd_output",
+      "name": "Command Output",
+      "type": "n8n-nodes-base.noOp",
+      "position": [1100, 700]
+    }
+  ],
+  "connections": {
+    "start": {
+      "main": [
+        [
+          {
+            "node": "create_container",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "cleanup_trigger": {
+      "main": [
+        [
+          {
+            "node": "cleanup_request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "cleanup_request": {
+      "main": [
+        [
+          {
+            "node": "cleanup_confirmation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "stats_trigger": {
+      "main": [
+        [
+          {
+            "node": "stats_request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "stats_request": {
+      "main": [
+        [
+          {
+            "node": "stats_display",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "create_container": {
+      "main": [
+        [
+          {
+            "node": "notify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "delete_trigger": {
+      "main": [
+        [
+          {
+            "node": "get_container_id",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "get_container_id": {
+      "main": [
+        [
+          {
+            "node": "delete_container",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "delete_container": {
+      "main": [
+        [
+          {
+            "node": "delete_confirmation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "cmd_trigger": {
+      "main": [
+        [
+          {
+            "node": "get_command",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "get_command": {
+      "main": [
+        [
+          {
+            "node": "exec_command",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "exec_command": {
+      "main": [
+        [
+          {
+            "node": "cmd_output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

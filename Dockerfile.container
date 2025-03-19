@@ -1,0 +1,22 @@
+FROM python:3.10-slim
+
+# Install dependencies 
+RUN apt-get update && \
+    apt-get install -y curl git jq unzip wget openssh-server sudo tmux vim && \
+    pip install --no-cache-dir requests openai langchain transformers && \
+    mkdir -p /workspace/data /workspace/scripts /run/sshd && \
+    echo 'root:password' | chpasswd && \
+    sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config && \
+    echo "export PS1='\[\033[1;36m\]ai-container\[\033[0m\]:\[\033[1;34m\]\w\[\033[0m\]$ '" >> /root/.bashrc
+
+WORKDIR /workspace
+
+# Create a welcome message
+RUN echo "Welcome to the AI Container!\nThis is an isolated environment for AI tasks.\nAll your work will be preserved in the /workspace directory.\n" > /etc/motd && \
+    echo "cat /etc/motd" >> /root/.bashrc
+
+# Expose SSH port
+EXPOSE 22
+
+# Start SSH server
+CMD ["/usr/sbin/sshd", "-D"]
