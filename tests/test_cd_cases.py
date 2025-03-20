@@ -6,9 +6,11 @@ Specifically designed to troubleshoot the 'cd' command issue
 import requests
 import json
 import sys
+import argparse
 
 def list_containers():
     """Get list of active containers from the API"""
+    # Use the direct container manager API first
     url = "http://localhost:5000/api/containers"
     try:
         response = requests.get(url)
@@ -48,7 +50,8 @@ def test_cd_commands(container_id):
     ]
     
     for cmd in test_cases:
-        url = f"http://localhost:5000/api/containers/{container_id}/exec"
+        # Use the API proxy for executing commands
+        url = f"http://localhost:5001/api/containers/{container_id}/exec"
         headers = {"Content-Type": "application/json"}
         data = {"command": cmd}
         

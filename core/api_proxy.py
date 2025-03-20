@@ -22,21 +22,33 @@ class DirectExecutor:
     def exec_command(container_id, command):
         """Execute a command in a container using Docker directly"""
         # Always use bash -c to ensure shell builtins work
-        exec_cmd = ["docker", "exec", container_id, "/bin/bash", "-c", command]
+        # Try multiple possible paths for docker binary
+        docker_paths = ["/usr/bin/docker", "/usr/local/bin/docker", "docker"]
         
-        try:
-            result = subprocess.run(exec_cmd, capture_output=True, text=True)
-            
-            # Format the response like the API would
-            return {
-                "exit_code": result.returncode,
-                "output": result.stdout if result.stdout else result.stderr if result.stderr else ""
-            }
-        except Exception as e:
-            return {
-                "exit_code": 1,
-                "output": f"Error: {str(e)}"
-            }
+        for docker_path in docker_paths:
+            try:
+                exec_cmd = [docker_path, "exec", container_id, "/bin/bash", "-c", command]
+                result = subprocess.run(exec_cmd, capture_output=True, text=True)
+                
+                # Format the response like the API would
+                return {
+                    "exit_code": result.returncode,
+                    "output": result.stdout if result.stdout else result.stderr if result.stderr else ""
+                }
+            except FileNotFoundError:
+                # Try the next path
+                continue
+            except Exception as e:
+                return {
+                    "exit_code": 1,
+                    "output": f"Error: {str(e)}"
+                }
+        
+        # If we get here, Docker wasn't found in any location
+        return {
+            "exit_code": 1,
+            "output": "Error: Docker command not found. Please ensure Docker is installed and in the PATH."
+        }
 
 class APIProxyHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
@@ -118,9 +130,22 @@ class APIProxyHandler(http.server.BaseHTTPRequestHandler):
 
 def check_container_exists(container_id):
     """Check if a container exists"""
-    cmd = ["docker", "ps", "-a", "--filter", f"id={container_id}", "--format", "{{.ID}}"]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    return result.stdout.strip() != ""
+    # Try multiple possible paths for docker binary
+    docker_paths = ["/usr/bin/docker", "/usr/local/bin/docker", "docker"]
+    
+    for docker_path in docker_paths:
+        try:
+            cmd = [docker_path, "ps", "-a", "--filter", f"id={container_id}", "--format", "{{.ID}}"]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            return result.stdout.strip() != ""
+        except FileNotFoundError:
+            # Try the next path
+            continue
+        except Exception:
+            return False
+    
+    # If we get here, Docker wasn't found in any location
+    return False
 
 def print_usage_instructions():
     print(f"\nAPI Proxy is running on port {PROXY_PORT}")

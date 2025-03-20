@@ -1,12 +1,21 @@
 #!/usr/bin/env python3
 """
-This script modifies the app.py file inside the ai-container-manager container
-to always use bash -c for command execution.
+This script provides two approaches to fix Docker command execution:
+1. Container modification: Changes app.py inside the container to always use bash -c
+2. External proxy: Uses a wrapper script and API proxy for Docker command handling
 """
 import subprocess
 import sys
 import tempfile
 import os
+import time
+import signal
+import json
+import requests
+import shutil
+from threading import Thread
+import socket
+import urllib.request
 
 def run_command(cmd, capture=True):
     """Run a command and return the output"""
@@ -147,13 +156,121 @@ def fix_container_manager():
         if os.path.exists(temp_filename):
             os.unlink(temp_filename)
 
+def setup_wrapper_script():
+    """Ensure the docker wrapper script is setup correctly"""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    wrapper_path = os.path.join(script_dir, "docker_wrapper.sh")
+    
+    if not os.path.exists(wrapper_path):
+        print(f"ERROR: Wrapper script not found at {wrapper_path}")
+        return False
+    
+    try:
+        # Make sure the script is executable
+        os.chmod(wrapper_path, 0o755)
+        print(f"Made wrapper script executable: {wrapper_path}")
+        
+        # Test the script
+        result = subprocess.run([wrapper_path, "version"], 
+                               capture_output=True, 
+                               text=True, 
+                               timeout=5)
+        
+        if result.returncode == 0:
+            print("✅ Docker wrapper script is working correctly")
+            return True
+        else:
+            print(f"❌ Docker wrapper script test failed: {result.stderr}")
+            return False
+    except Exception as e:
+        print(f"❌ Error setting up wrapper script: {str(e)}")
+        return False
+
+def check_api_proxy():
+    """Check if the API proxy is running"""
+    try:
+        response = requests.get("http://localhost:5001/api/containers", timeout=2)
+        if response.status_code == 200:
+            print("✅ API proxy is already running")
+            return True
+    except:
+        print("API proxy is not running")
+    
+    return False
+
+def start_api_proxy():
+    """Start the API proxy in the background"""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    proxy_script = os.path.join(script_dir, "docker_api_proxy.py")
+    
+    if not os.path.exists(proxy_script):
+        print(f"❌ API proxy script not found at {proxy_script}")
+        return False
+    
+    try:
+        print(f"Starting API proxy from {proxy_script}")
+        # Start the proxy in the background
+        subprocess.Popen([sys.executable, proxy_script], 
+                         stdout=subprocess.PIPE,
+                         stderr=subprocess.PIPE)
+        
+        # Wait for the proxy to start
+        for _ in range(5):
+            time.sleep(1)
+            if check_api_proxy():
+                return True
+        
+        print("❌ Failed to start API proxy")
+        return False
+    except Exception as e:
+        print(f"❌ Error starting API proxy: {str(e)}")
+        return False
+
+def apply_proxy_fix():
+    """Apply the proxy-based fix"""
+    print("\n--- Setting up Docker API Proxy ---\n")
+    
+    # Setup the wrapper script
+    if not setup_wrapper_script():
+        print("Failed to setup wrapper script, aborting")
+        return False
+    
+    # Start the API proxy if not running
+    if not check_api_proxy():
+        if not start_api_proxy():
+            print("Failed to start API proxy, aborting")
+            return False
+    
+    print("\n✅ Proxy fix applied successfully!")
+    print("The API proxy is running on port 5001")
+    print("Use this port for all API requests to ensure Docker commands work")
+    print("Example: curl http://localhost:5001/api/containers")
+    return True
+
 if __name__ == "__main__":
-    print("Starting direct fix for container exec issue...")
-    success = fix_container_manager()
+    print("Starting fix for Docker container exec issue...")
+    print("This script offers two fix options:")
+    print("1. Direct container fix (modifies app.py inside the container)")
+    print("2. Proxy-based fix (starts an API proxy that handles Docker commands)")
+    
+    while True:
+        choice = input("\nWhich fix would you like to apply? (1, 2, or q to quit): ")
+        
+        if choice == "q":
+            print("Exiting without applying any fix.")
+            sys.exit(0)
+        elif choice == "1":
+            success = fix_container_manager()
+            break
+        elif choice == "2":
+            success = apply_proxy_fix()
+            break
+        else:
+            print("Invalid choice. Please enter 1, 2, or q.")
     
     if success:
-        print("\nFix applied successfully. The container manager has been restarted.")
-        print("Please test again with:")
+        print("\nFix applied successfully.")
+        print("Please test with:")
         print("  python3 test_cd_cases.py")
     else:
         print("\nFailed to apply the fix. Please check the error messages above.")

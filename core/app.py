@@ -292,7 +292,8 @@ def create_container():
             detach=True,
             ports={'22/tcp': ssh_port},
             volumes={
-                f'{container_name}-workspace': {'bind': '/workspace', 'mode': 'rw'}
+                f'{container_name}-workspace': {'bind': '/workspace', 'mode': 'rw'},
+                '/home/jonflatt/.ssh': {'bind': '/root/.ssh', 'mode': 'ro'}  # Mount SSH directory read-only
             },
             environment={
                 'CONTAINER_ID': container_id
@@ -690,4 +691,8 @@ def container_stats():
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
+    # When run directly, ensure shell builtins like 'cd' always work properly
+    print("Starting AI Container Manager in standalone mode")
+    print("Using direct Docker commands for container exec endpoint")
+    
     app.run(host='0.0.0.0', port=5000, debug=True)

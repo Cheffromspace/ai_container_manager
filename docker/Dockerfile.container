@@ -1,0 +1,49 @@
+FROM python:3.10-slim
+
+# Install dependencies 
+RUN apt-get update && \
+    apt-get install -y curl git jq unzip wget openssh-server sudo tmux vim && \
+    pip install --no-cache-dir requests openai langchain transformers && \
+    mkdir -p /workspace/data /workspace/scripts /run/sshd /root/.ssh && \
+    echo 'root:password' | chpasswd && \
+    sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config && \
+    sed -i 's/#StrictHostKeyChecking ask/StrictHostKeyChecking no/' /etc/ssh/ssh_config && \
+    echo "export PS1='\[\033[1;36m\]ai-container\[\033[0m\]:\[\033[1;34m\]\w\[\033[0m\]$ '" >> /root/.bashrc && \
+    chmod 700 /root/.ssh
+
+WORKDIR /workspace
+
+# Create a welcome message
+RUN echo "Welcome to the AI Container!\nThis is an isolated environment for AI tasks.\nAll your work will be preserved in the /workspace directory.\n" > /etc/motd && \
+    echo "cat /etc/motd" >> /root/.bashrc && \
+    echo 'if [ -f "/root/.ssh/config" ]; then chmod 600 /root/.ssh/config; fi' >> /root/.bashrc && \
+    echo 'if [ -d "/root/.ssh" ]; then find /root/.ssh -type f -name "id_*" -exec chmod 600 {} \; ; fi' >> /root/.bashrc && \
+    echo 'if [ -f "/root/.ssh/known_hosts" ]; then chmod 644 /root/.ssh/known_hosts; fi' >> /root/.bashrc && \
+    echo 'if [ ! -f "/root/.ssh/known_hosts" ] && [ -f "/etc/ssh/ssh_known_hosts" ]; then cp /etc/ssh/ssh_known_hosts /root/.ssh/known_hosts; fi' >> /root/.bashrc
+
+# Expose SSH port
+EXPOSE 22
+
+# Create init script
+RUN echo '#!/bin/bash\n\
+# Auto-accept GitHub keys if needed\n\
+if ! grep -q "github.com" /root/.ssh/known_hosts 2>/dev/null; then\n\
+  mkdir -p /root/.ssh\n\
+  ssh-keyscan github.com >> /root/.ssh/known_hosts 2>/dev/null\n\
+  chmod 644 /root/.ssh/known_hosts\n\
+fi\n\
+\n\
+# Set correct permissions on SSH files\n\
+if [ -d "/root/.ssh" ]; then\n\
+  chmod 700 /root/.ssh\n\
+  find /root/.ssh -type f -name "id_*" -exec chmod 600 {} \\;\n\
+  if [ -f "/root/.ssh/config" ]; then chmod 600 /root/.ssh/config; fi\n\
+  if [ -f "/root/.ssh/known_hosts" ]; then chmod 644 /root/.ssh/known_hosts; fi\n\
+fi\n\
+\n\
+# Start SSH server\n\
+exec /usr/sbin/sshd -D\n\
+' > /root/init.sh && chmod +x /root/init.sh
+
+# Start SSH server
+CMD ["/root/init.sh"]

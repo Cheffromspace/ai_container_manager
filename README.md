@@ -1,154 +1,68 @@
-# AI Container Manager for n8n
+# AI Container Manager
 
-This service allows n8n AI agents to create, manage, and interact with Docker containers on demand.
+A Flask-based API for managing Docker containers for AI workloads.
 
-## Features
+## Project Structure
 
-- Create containers on demand via REST API
-- Each container has a persistent SSH session
-- Execute commands within containers
-- Manage multiple containers simultaneously
-- Containers have persistent storage
-- Automatic container expiration after 2 hours
-- Container usage statistics and monitoring
-- Bulk container cleanup
+The project has been reorganized into a more maintainable structure:
 
-## Setup
+- `core/` - Core application logic
+  - `app.py` - Main Flask application
+  - `api_proxy.py` - API proxy functionality
+- `utils/` - Utility scripts for container management
+  - `create_container.py` - Create new containers
+  - `sync_containers.py` - Sync container tracking
+  - `direct_executor.py` - Direct Docker command execution
+  - `restart_all.py` - Restart all containers
+  - `kill_containers.py` - Kill running containers
+  - And more utility scripts
+- `tests/` - Test suite
+  - `test_cd_cases.py` - Test CD command functionality
+  - `test_fixed.py` - Test fixes
+  - `test_docker_direct.py` - Test direct Docker execution
+  - And more test scripts
+- `debug/` - Debugging tools
+  - `check_api.py` - Check API functionality
+  - `debug_api.py` - Debug API issues
+- `docker/` - Docker configuration
+  - `Dockerfile` - Main application Dockerfile
+  - `Dockerfile.container` - Container image Dockerfile
+  - `Dockerfile.proxy` - API proxy Dockerfile
+- `docs/` - Documentation
+  - Various markdown files with documentation
 
-1. Build the container manager service:
+## Quick Start
 
-```bash
-cd ai_container_manager
-docker build -t ai-container-manager .
+1. Build the Docker images:
+   ```
+   ./docker/build-images.sh
+   ```
+
+2. Start the container manager:
+   ```
+   python run.py
+   ```
+
+3. Create a new container:
+   ```
+   python utils/create_container.py
+   ```
+
+4. Check active containers:
+   ```
+   python debug/check_api.py
+   ```
+
+## Testing
+
+Run the tests with:
+```
+pytest
 ```
 
-2. Build the AI container image:
+## Documentation
 
-```bash
-cd ai_container_manager
-docker build -t ai-container-image -f Dockerfile.container .
-```
-
-3. Start the container manager:
-
-```bash
-docker run -d --name ai-container-manager \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  -p 5000:5000 \
-  ai-container-manager
-```
-
-## API Reference
-
-### List Containers
-
-```
-GET /api/containers
-```
-
-Returns a list of all active containers.
-
-### Create Container
-
-```
-POST /api/containers
-```
-
-Creates a new container and returns its details including SSH connection info.
-
-### Delete Container
-
-```
-DELETE /api/containers/{container_id}
-```
-
-Stops and removes the specified container.
-
-### Execute Command
-
-```
-POST /api/containers/{container_id}/exec
-```
-
-Request body:
-```json
-{
-  "command": "echo 'Hello, world!'"
-}
-```
-
-Executes a command in the container and returns the result.
-
-### Container Stats
-
-```
-GET /api/containers/stats
-```
-
-Returns statistics about container usage, including counts, ages, and expiration times.
-
-Response:
-```json
-{
-  "active_count": 3,
-  "expiry_hours": 2,
-  "containers": [
-    {
-      "id": "container-uuid",
-      "name": "ai-container-12345678",
-      "age_hours": 1.5,
-      "expires_in_hours": 0.5
-    }
-  ]
-}
-```
-
-### Cleanup Containers
-
-```
-POST /api/containers/cleanup
-```
-
-Stops and removes all active containers.
-
-Response:
-```json
-{
-  "message": "Cleanup completed. 3 containers removed, 0 failed.",
-  "success_count": 3,
-  "fail_count": 0
-}
-```
-
-## Integration with n8n
-
-An example workflow is provided in the `n8n-example-workflow.json` file. Import this into your n8n instance to get started.
-
-Use the HTTP Request node in n8n to interact with the Container Manager API. For example:
-
-1. To create a container:
-   - Method: POST
-   - URL: http://localhost:5000/api/containers
-
-2. To execute a command:
-   - Method: POST
-   - URL: http://localhost:5000/api/containers/{container_id}/exec
-   - Body: {"command": "your_command_here"}
-
-3. To delete a container:
-   - Method: DELETE
-   - URL: http://localhost:5000/api/containers/{container_id}
-   
-4. To get container stats:
-   - Method: GET
-   - URL: http://localhost:5000/api/containers/stats
-
-5. To clean up all containers:
-   - Method: POST
-   - URL: http://localhost:5000/api/containers/cleanup
-
-## Security Considerations
-
-- Container passwords are fixed for simplicity but should be randomized in production
-- Consider implementing authentication for the API
-- Container resource limits should be implemented for production use# ai_container_manager
+See the `docs/` directory for detailed documentation:
+- [Quick Start Guide](docs/QUICK_START.md)
+- [Advanced Workflows](docs/ADVANCED_WORKFLOWS.md)
+- [Integration Guide](docs/INTEGRATION_GUIDE.md)

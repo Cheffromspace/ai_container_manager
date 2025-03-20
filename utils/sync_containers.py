@@ -137,13 +137,13 @@ def handle_existing_containers():
         cat /tmp/handle_existing_containers.py > /tmp/handle_existing_containers_func.py && 
         python3 -c "
 import re
-with open('/app/app.py', 'r') as f:
+with open('/app/core/app.py', 'r') as f:
     content = f.read()
 with open('/tmp/handle_existing_containers_func.py', 'r') as f:
     new_func = f.read()
 pattern = r'def handle_existing_containers\\(\\):[\\s\\S]*?(?=\\n\\# Run container tracking)'
 updated = re.sub(pattern, new_func.strip(), content)
-with open('/app/app.py', 'w') as f:
+with open('/app/core/app.py', 'w') as f:
     f.write(updated)
 print('File updated successfully')
 "
@@ -215,7 +215,7 @@ for c in containers:
     print(f"  - {c.name} (status: {c.status})")
 
 # Access the active_containers dict from the app
-from app import active_containers
+from core.app import active_containers
 
 # Clear existing tracking
 print("\\nClearing existing container tracking...")
@@ -284,7 +284,7 @@ for container_id, info in active_containers.items():
         # Execute the script
         print("Running sync script in container...")
         result = subprocess.run(
-            ['docker', 'exec', api_container_id, 'cd', '/app', '&&', 'python3', '/tmp/sync_containers.py'],
+            ['docker', 'exec', api_container_id, 'cd', '/app/core', '&&', 'python3', '/tmp/sync_containers.py'],
             capture_output=True, text=True, check=True
         )
         print(result.stdout)

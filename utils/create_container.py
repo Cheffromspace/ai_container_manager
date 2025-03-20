@@ -35,7 +35,7 @@ if __name__ == "__main__":
     
     if container_id:
         print(f"\nNew container created with ID: {container_id}")
-        print(f"You can now use this container for testing with: python3 test_cd_cases.py {container_id}")
+        print(f"You can now use this container for testing with: python3 tests/test_cd_cases.py {container_id}")
     else:
         print("\nFailed to create container. Check if the API is running properly.")
         sys.exit(1)

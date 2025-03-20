@@ -10,15 +10,29 @@ RUN apt-get update && \
 
 WORKDIR /workspace
 
-# Copy application files
-COPY app.py /app/
-COPY requirements.txt /app/
+# Copy application files following new directory structure
+COPY ./core /app/core/
+COPY ./utils /app/utils/
+COPY ./debug /app/debug/
+COPY ./docker /app/docker/
+COPY ./docs /app/docs/
+COPY ./tests /app/tests/
+COPY ./run.py /app/
+COPY ./__init__.py /app/
+COPY ./docker_wrapper.sh /app/
+COPY ./requirements.txt /app/
 
 # Install Python dependencies
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
+# Ensure wrapper script is executable
+RUN chmod +x /app/docker_wrapper.sh
+
 # Expose API and SSH ports
 EXPOSE 5000 22
 
+# Copy app.py to the root level as a workaround for module imports
+COPY ./core/app.py /app/app.py
+
 # Start both the API server and SSH server
-CMD ["sh", "-c", "/usr/sbin/sshd && cd /app && gunicorn -b 0.0.0.0:5000 app:app"]
+CMD ["sh", "-c", "/usr/sbin/sshd && cd /app && python app.py"]
