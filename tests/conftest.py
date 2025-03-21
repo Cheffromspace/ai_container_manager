@@ -2,17 +2,26 @@ import pytest
 import sys
 import os
 import uuid
-import docker
 import time
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 # Add the parent directory to the path so we can import the core modules
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
+# Mock the docker module before importing app
+docker_mock = MagicMock()
+sys.modules['docker'] = docker_mock
+
+# Create mock Docker client
+mock_client = MagicMock()
+docker_mock.from_env.return_value = mock_client
+
+# Now import app with mocked docker
+from core.app import app, active_containers
+
 @pytest.fixture
 def api_client():
     """Create a test client for the API"""
-    from core.app import app
     app.config['TESTING'] = True
     with app.test_client() as client:
         yield client
@@ -27,15 +36,12 @@ def container_id():
     # Generate a UUID that can be used as a container ID
     mock_id = str(uuid.uuid4())
     
-    # Mock the active_containers dictionary in the app
-    from core.app import active_containers
-    
     # Create a mock container object
     mock_container = MagicMock()
     mock_container.name = f"ai-container-{mock_id[:8]}"
     mock_container.status = "running"
     mock_container.exec_run.return_value.exit_code = 0
-    mock_container.exec_run.return_value.output = b"Mock command output"
+    mock_container.exec_run.return_value.output = (b"Mock command output", b"")
     
     # Add to active containers
     active_containers[mock_id] = {
