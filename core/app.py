@@ -482,9 +482,18 @@ def create_container():
 @app.route('/api/containers/<container_id>', methods=['DELETE'])
 @app.route('/api/containers/delete/<container_id>', methods=['DELETE'])  # Added alternative endpoint
 def delete_container(container_id):
-    """Stop and remove a container"""
+    """Stop and remove a container by ID or name"""
+    # Check if provided identifier is a name instead of ID
     if container_id not in active_containers:
-        return jsonify({'error': 'Container not found'}), 404
+        # Try to find container by name
+        for id, info in active_containers.items():
+            if info.get('name') == container_id or info.get('name') == f"ai-container-{container_id}":
+                container_id = id
+                break
+        
+        # If still not found after checking names
+        if container_id not in active_containers:
+            return jsonify({'error': 'Container not found'}), 404
     
     try:
         # Get container info
@@ -507,34 +516,56 @@ def delete_container(container_id):
 @app.route('/api/containers/<container_id>/restart', methods=['POST'])
 @app.route('/api/containers/restart/<container_id>', methods=['POST'])  # Added alternative endpoint
 def restart_container(container_id):
-    """Restart a specific container"""
+    """Restart a specific container by ID or name"""
+    # Check if provided identifier is a name instead of ID
+    original_id = container_id  # Save original input for response messages
     if container_id not in active_containers:
-        # Check if the container exists in Docker but is not tracked
-        try:
-            all_containers = client.containers.list(all=True, filters={"name": f"ai-container-{container_id}"})
-            if not all_containers:
-                return jsonify({'error': 'Container not found'}), 404
+        # Try to find container by name
+        for id, info in active_containers.items():
+            if info.get('name') == container_id or info.get('name') == f"ai-container-{container_id}":
+                container_id = id
+                break
+        
+        # If still not found in active_containers after checking names
+        if container_id not in active_containers:
+            # Check if the container exists in Docker but is not tracked
+            try:
+                # Try both direct name and ai-container-prefix
+                filters = {"name": container_id}
+                all_containers = client.containers.list(all=True, filters=filters)
                 
-            # Use the first container that matches the pattern
-            container = all_containers[0]
-            container_name = container.name
-            
-            # Attempt to restart the container
-            logger.info(f"Restarting untracked container {container_name}")
-            container.restart(timeout=10)
-            
-            # Trigger a refresh of container tracking
-            handle_existing_containers()
-            
-            # Check if the container is now tracked
-            if container_id in active_containers:
-                return jsonify({'message': f'Container {container_id} restarted successfully and is now being tracked'}), 200
-            else:
-                return jsonify({'warning': f'Container {container_id} restarted but is not being tracked properly, please refresh tracking'}), 200
+                if not all_containers:
+                    # Try with ai-container prefix if not already using it
+                    if not container_id.startswith("ai-container-"):
+                        filters = {"name": f"ai-container-{container_id}"}
+                        all_containers = client.containers.list(all=True, filters=filters)
                 
-        except Exception as e:
-            logger.error(f"Failed to restart untracked container {container_id}: {str(e)}")
-            return jsonify({'error': str(e)}), 500
+                if not all_containers:
+                    return jsonify({'error': 'Container not found'}), 404
+                    
+                # Use the first container that matches the pattern
+                container = all_containers[0]
+                container_name = container.name
+                
+                # Attempt to restart the container
+                logger.info(f"Restarting untracked container {container_name}")
+                container.restart(timeout=10)
+                
+                # Trigger a refresh of container tracking
+                handle_existing_containers()
+                
+                # Get actual container ID for tracking lookup
+                container_short_id = container_name.split('-')[-1]
+                
+                # Check if the container is now tracked
+                if container_short_id in active_containers:
+                    return jsonify({'message': f'Container {original_id} restarted successfully and is now being tracked'}), 200
+                else:
+                    return jsonify({'warning': f'Container {original_id} restarted but is not being tracked properly, please refresh tracking'}), 200
+                    
+            except Exception as e:
+                logger.error(f"Failed to restart untracked container {original_id}: {str(e)}")
+                return jsonify({'error': str(e)}), 500
     
     try:
         # Get container info
@@ -557,25 +588,36 @@ def restart_container(container_id):
         container_info['status'] = new_status
         
         return jsonify({
-            'message': f'Container {container_id} restarted successfully',
+            'message': f'Container {original_id} restarted successfully',
             'name': container_name,
             'previous_status': old_status,
             'current_status': new_status
         }), 200
     
     except Exception as e:
-        logger.error(f"Failed to restart container {container_id}: {str(e)}")
+        logger.error(f"Failed to restart container {original_id}: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/containers/<container_id>/exec', methods=['POST'])
 @app.route('/api/containers/exec/<container_id>', methods=['POST'])  # Added alternative endpoint
 def exec_command(container_id):
-    """Execute a command in a container"""
+    """Execute a command in a container by ID or name"""
+    # Check if provided identifier is a name instead of ID
+    original_id = container_id  # Save original input for response messages
     if container_id not in active_containers:
-        # Log detailed information about the missing container
-        logger.error(f"Container ID {container_id} not found in active_containers")
-        logger.info(f"Available container IDs: {list(active_containers.keys())}")
-        return jsonify({'error': 'Container not found'}), 404
+        # Try to find container by name
+        for id, info in active_containers.items():
+            if info.get('name') == container_id or info.get('name') == f"ai-container-{container_id}":
+                container_id = id
+                break
+        
+        # If still not found after checking names
+        if container_id not in active_containers:
+            # Log detailed information about the missing container
+            logger.error(f"Container identifier '{original_id}' not found in active_containers")
+            logger.info(f"Available container IDs: {list(active_containers.keys())}")
+            logger.info(f"Available container names: {[info.get('name') for info in active_containers.values()]}")
+            return jsonify({'error': 'Container not found'}), 404
     
     data = request.json
     command = data.get('command')
@@ -590,7 +632,7 @@ def exec_command(container_id):
         
         # SIMPLER APPROACH: Always use a shell to execute commands
         # This ensures shell builtins like 'cd' always work properly
-        logger.info(f"Executing command: {command}")
+        logger.info(f"Executing command in container {container_info['name']}: {command}")
         logger.info(f"Using shell for all commands")
         
         # Always use bash explicitly with the command as an argument
@@ -629,7 +671,7 @@ def exec_command(container_id):
         })
     
     except Exception as e:
-        logger.error(f"Failed to execute command in container {container_id}: {str(e)}")
+        logger.error(f"Failed to execute command in container {original_id}: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 def find_available_port(start_port, end_port):

@@ -19,15 +19,60 @@ TARGET_API = "http://localhost:5000"
 
 class DirectExecutor:
     @staticmethod
-    def exec_command(container_id, command):
-        """Execute a command in a container using Docker directly"""
+    def exec_command(container_identifier, command):
+        """Execute a command in a container using Docker directly
+        
+        Args:
+            container_identifier: Either a container ID or name
+            command: The command to execute
+        """
         # Always use bash -c to ensure shell builtins work
         # Try multiple possible paths for docker binary
         docker_paths = ["/usr/bin/docker", "/usr/local/bin/docker", "docker"]
         
+        # First determine if we're dealing with a container ID or name
+        container_exists_by_id = False
+        container_exists_by_name = False
+        actual_container_id = container_identifier
+        
+        # Check if the container exists by ID first
         for docker_path in docker_paths:
             try:
-                exec_cmd = [docker_path, "exec", container_id, "/bin/bash", "-c", command]
+                check_cmd = [docker_path, "ps", "-a", "--filter", f"id={container_identifier}", "--format", "{{.ID}}"]
+                result = subprocess.run(check_cmd, capture_output=True, text=True)
+                if result.stdout.strip():
+                    container_exists_by_id = True
+                    break
+            except:
+                continue
+                
+        # If not found by ID, try to find by name
+        if not container_exists_by_id:
+            for docker_path in docker_paths:
+                try:
+                    # Try direct name
+                    check_cmd = [docker_path, "ps", "-a", "--filter", f"name={container_identifier}", "--format", "{{.ID}}"]
+                    result = subprocess.run(check_cmd, capture_output=True, text=True)
+                    if result.stdout.strip():
+                        container_exists_by_name = True
+                        actual_container_id = result.stdout.strip()
+                        break
+                        
+                    # Try with ai-container- prefix if not already using it
+                    if not container_identifier.startswith("ai-container-"):
+                        check_cmd = [docker_path, "ps", "-a", "--filter", f"name=ai-container-{container_identifier}", "--format", "{{.ID}}"]
+                        result = subprocess.run(check_cmd, capture_output=True, text=True)
+                        if result.stdout.strip():
+                            container_exists_by_name = True
+                            actual_container_id = result.stdout.strip()
+                            break
+                except:
+                    continue
+                    
+        # Execute the command using the determined container identifier
+        for docker_path in docker_paths:
+            try:
+                exec_cmd = [docker_path, "exec", actual_container_id, "/bin/bash", "-c", command]
                 result = subprocess.run(exec_cmd, capture_output=True, text=True)
                 
                 # Format the response like the API would
@@ -128,23 +173,59 @@ class APIProxyHandler(http.server.BaseHTTPRequestHandler):
         except Exception as e:
             self.send_error(502, f"Error forwarding request: {str(e)}")
 
-def check_container_exists(container_id):
-    """Check if a container exists"""
+def check_container_exists(container_identifier):
+    """Check if a container exists by ID or name
+    
+    Args:
+        container_identifier: Either a container ID or name
+        
+    Returns:
+        bool: True if container exists, False otherwise
+    """
     # Try multiple possible paths for docker binary
     docker_paths = ["/usr/bin/docker", "/usr/local/bin/docker", "docker"]
     
+    # Try to find by ID first
     for docker_path in docker_paths:
         try:
-            cmd = [docker_path, "ps", "-a", "--filter", f"id={container_id}", "--format", "{{.ID}}"]
+            cmd = [docker_path, "ps", "-a", "--filter", f"id={container_identifier}", "--format", "{{.ID}}"]
             result = subprocess.run(cmd, capture_output=True, text=True)
-            return result.stdout.strip() != ""
+            if result.stdout.strip() != "":
+                return True
         except FileNotFoundError:
             # Try the next path
             continue
         except Exception:
-            return False
+            pass  # Continue to next method
     
-    # If we get here, Docker wasn't found in any location
+    # If not found by ID, try by exact name
+    for docker_path in docker_paths:
+        try:
+            cmd = [docker_path, "ps", "-a", "--filter", f"name={container_identifier}", "--format", "{{.ID}}"]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.stdout.strip() != "":
+                return True
+        except FileNotFoundError:
+            # Try the next path
+            continue
+        except Exception:
+            pass  # Continue to next method
+    
+    # Try with ai-container- prefix if not already using it
+    if not container_identifier.startswith("ai-container-"):
+        for docker_path in docker_paths:
+            try:
+                cmd = [docker_path, "ps", "-a", "--filter", f"name=ai-container-{container_identifier}", "--format", "{{.ID}}"]
+                result = subprocess.run(cmd, capture_output=True, text=True)
+                if result.stdout.strip() != "":
+                    return True
+            except FileNotFoundError:
+                # Try the next path
+                continue
+            except Exception:
+                pass
+    
+    # If we get here, the container wasn't found
     return False
 
 def print_usage_instructions():
