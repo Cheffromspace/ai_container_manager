@@ -7,6 +7,7 @@ import logging
 import threading
 import sys
 import subprocess
+import re
 from datetime import datetime, timedelta
 from flask import Flask, request, jsonify
 
@@ -164,6 +165,75 @@ active_containers = {}
 
 # Container expiration time in hours
 CONTAINER_EXPIRY_HOURS = 2
+
+def validate_container_identifier(identifier):
+    """
+    Validate container identifier format to prevent injection
+    
+    Args:
+        identifier (str): The container identifier to validate
+        
+    Returns:
+        bool: True if valid, False otherwise
+    """
+    # Only allow alphanumeric chars, dashes and underscores
+    if not isinstance(identifier, str):
+        return False
+    if not re.match(r'^[a-zA-Z0-9_\-]+$', identifier):
+        return False
+    return True
+
+def get_container_by_identifier(container_identifier):
+    """
+    Get a container by ID or name
+    
+    Args:
+        container_identifier (str): Either a container ID or name
+        
+    Returns:
+        tuple: (container_id, container_info) if found, (None, None) otherwise
+    """
+    # Validate the identifier format first
+    if not validate_container_identifier(container_identifier):
+        logger.warning(f"Invalid container identifier format: {container_identifier}")
+        return None, None
+    
+    # Check if it's a known container ID first
+    if container_identifier in active_containers:
+        return container_identifier, active_containers[container_identifier]
+    
+    # Try to find by name
+    for container_id, info in active_containers.items():
+        if info.get('name') == container_identifier:
+            return container_id, info
+        
+        # Also check with ai-container- prefix if not already using it
+        if not container_identifier.startswith("ai-container-"):
+            if info.get('name') == f"ai-container-{container_identifier}":
+                return container_id, info
+    
+    # Not found in tracked containers, try to look in Docker directly
+    try:
+        client = docker.from_env()
+        # Try by name first
+        filters = {"name": container_identifier}
+        containers = client.containers.list(all=True, filters=filters)
+        
+        if not containers and not container_identifier.startswith("ai-container-"):
+            # Try with ai-container prefix
+            filters = {"name": f"ai-container-{container_identifier}"}
+            containers = client.containers.list(all=True, filters=filters)
+            
+        if containers:
+            # Found container in Docker but not in our tracking
+            container = containers[0]
+            logger.warning(f"Container {container.name} found in Docker but not in active_containers")
+            return container.id, {"name": container.name, "container_obj": container, "untracked": True}
+    except Exception as e:
+        logger.error(f"Error looking up container in Docker: {str(e)}")
+    
+    # Not found
+    return None, None
 
 # Check for expired containers every X minutes
 def check_expired_containers():
@@ -483,95 +553,63 @@ def create_container():
 @app.route('/api/containers/delete/<container_id>', methods=['DELETE'])  # Added alternative endpoint
 def delete_container(container_id):
     """Stop and remove a container by ID or name"""
-    # Check if provided identifier is a name instead of ID
-    if container_id not in active_containers:
-        # Try to find container by name
-        for id, info in active_containers.items():
-            if info.get('name') == container_id or info.get('name') == f"ai-container-{container_id}":
-                container_id = id
-                break
+    # Save original identifier for response messages
+    original_id = container_id
+    
+    # Validate the container identifier
+    if not validate_container_identifier(container_id):
+        return jsonify({'error': 'Invalid container identifier format'}), 400
         
-        # If still not found after checking names
-        if container_id not in active_containers:
-            return jsonify({'error': 'Container not found'}), 404
+    # Use the shared lookup function
+    container_id, container_info = get_container_by_identifier(container_id)
+    
+    if not container_id or not container_info:
+        return jsonify({'error': f'Container not found: {original_id}'}), 404
     
     try:
-        # Get container info
-        container_info = active_containers[container_id]
-        container = container_info['container_obj']
-        
+        # Get the container object
+        container = container_info.get('container_obj')
+        if not container:
+            return jsonify({'error': f'Container object not found for {original_id}'}), 500
+            
         # Stop and remove the container
         container.stop()
         container.remove()
         
-        # Remove from active containers
-        del active_containers[container_id]
+        # Remove from active containers if it's tracked
+        if not container_info.get('untracked', False) and container_id in active_containers:
+            del active_containers[container_id]
         
-        return jsonify({'message': f'Container {container_id} deleted successfully'}), 200
+        return jsonify({'message': f'Container {original_id} deleted successfully'}), 200
     
     except Exception as e:
-        logger.error(f"Failed to delete container {container_id}: {str(e)}")
+        logger.error(f"Failed to delete container {original_id}: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/containers/<container_id>/restart', methods=['POST'])
 @app.route('/api/containers/restart/<container_id>', methods=['POST'])  # Added alternative endpoint
 def restart_container(container_id):
     """Restart a specific container by ID or name"""
-    # Check if provided identifier is a name instead of ID
-    original_id = container_id  # Save original input for response messages
-    if container_id not in active_containers:
-        # Try to find container by name
-        for id, info in active_containers.items():
-            if info.get('name') == container_id or info.get('name') == f"ai-container-{container_id}":
-                container_id = id
-                break
+    # Save original identifier for response messages
+    original_id = container_id
+    
+    # Validate the container identifier
+    if not validate_container_identifier(container_id):
+        return jsonify({'error': 'Invalid container identifier format'}), 400
         
-        # If still not found in active_containers after checking names
-        if container_id not in active_containers:
-            # Check if the container exists in Docker but is not tracked
-            try:
-                # Try both direct name and ai-container-prefix
-                filters = {"name": container_id}
-                all_containers = client.containers.list(all=True, filters=filters)
-                
-                if not all_containers:
-                    # Try with ai-container prefix if not already using it
-                    if not container_id.startswith("ai-container-"):
-                        filters = {"name": f"ai-container-{container_id}"}
-                        all_containers = client.containers.list(all=True, filters=filters)
-                
-                if not all_containers:
-                    return jsonify({'error': 'Container not found'}), 404
-                    
-                # Use the first container that matches the pattern
-                container = all_containers[0]
-                container_name = container.name
-                
-                # Attempt to restart the container
-                logger.info(f"Restarting untracked container {container_name}")
-                container.restart(timeout=10)
-                
-                # Trigger a refresh of container tracking
-                handle_existing_containers()
-                
-                # Get actual container ID for tracking lookup
-                container_short_id = container_name.split('-')[-1]
-                
-                # Check if the container is now tracked
-                if container_short_id in active_containers:
-                    return jsonify({'message': f'Container {original_id} restarted successfully and is now being tracked'}), 200
-                else:
-                    return jsonify({'warning': f'Container {original_id} restarted but is not being tracked properly, please refresh tracking'}), 200
-                    
-            except Exception as e:
-                logger.error(f"Failed to restart untracked container {original_id}: {str(e)}")
-                return jsonify({'error': str(e)}), 500
+    # Use the shared lookup function
+    container_id, container_info = get_container_by_identifier(container_id)
+    
+    if not container_id or not container_info:
+        return jsonify({'error': f'Container not found: {original_id}'}), 404
     
     try:
-        # Get container info
-        container_info = active_containers[container_id]
-        container = container_info['container_obj']
-        container_name = container_info['name']
+        # Get the container object
+        container = container_info.get('container_obj')
+        if not container:
+            return jsonify({'error': f'Container object not found for {original_id}'}), 500
+            
+        container_name = container_info.get('name')
         
         # Get current status
         old_status = container.status
@@ -584,8 +622,23 @@ def restart_container(container_id):
         container.reload()
         new_status = container.status
         
-        # Update tracked status
-        container_info['status'] = new_status
+        # If this is an untracked container, try to add it to tracking
+        if container_info.get('untracked', False):
+            # Trigger a refresh of container tracking to include this container
+            handle_existing_containers()
+            logger.info(f"Refreshed container tracking after restarting untracked container {container_name}")
+            
+            # Update response message
+            return jsonify({
+                'message': f'Container {original_id} restarted successfully and tracking refreshed',
+                'name': container_name,
+                'previous_status': old_status,
+                'current_status': new_status
+            }), 200
+        else:
+            # Update tracked status for tracked containers
+            if container_id in active_containers:
+                active_containers[container_id]['status'] = new_status
         
         return jsonify({
             'message': f'Container {original_id} restarted successfully',
@@ -602,22 +655,22 @@ def restart_container(container_id):
 @app.route('/api/containers/exec/<container_id>', methods=['POST'])  # Added alternative endpoint
 def exec_command(container_id):
     """Execute a command in a container by ID or name"""
-    # Check if provided identifier is a name instead of ID
-    original_id = container_id  # Save original input for response messages
-    if container_id not in active_containers:
-        # Try to find container by name
-        for id, info in active_containers.items():
-            if info.get('name') == container_id or info.get('name') == f"ai-container-{container_id}":
-                container_id = id
-                break
+    # Save original identifier for response messages
+    original_id = container_id
+    
+    # Validate the container identifier
+    if not validate_container_identifier(container_id):
+        return jsonify({'error': 'Invalid container identifier format'}), 400
         
-        # If still not found after checking names
-        if container_id not in active_containers:
-            # Log detailed information about the missing container
-            logger.error(f"Container identifier '{original_id}' not found in active_containers")
-            logger.info(f"Available container IDs: {list(active_containers.keys())}")
-            logger.info(f"Available container names: {[info.get('name') for info in active_containers.values()]}")
-            return jsonify({'error': 'Container not found'}), 404
+    # Use the shared lookup function
+    container_id, container_info = get_container_by_identifier(container_id)
+    
+    if not container_id or not container_info:
+        # Log detailed information about the missing container
+        logger.error(f"Container identifier '{original_id}' not found")
+        logger.info(f"Available container IDs: {list(active_containers.keys())}")
+        logger.info(f"Available container names: {[info.get('name') for info in active_containers.values()]}")
+        return jsonify({'error': f'Container not found: {original_id}'}), 404
     
     data = request.json
     command = data.get('command')
@@ -626,13 +679,14 @@ def exec_command(container_id):
         return jsonify({'error': 'Command is required'}), 400
     
     try:
-        # Get container
-        container_info = active_containers[container_id]
-        container = container_info['container_obj']
+        # Get the container object
+        container = container_info.get('container_obj')
+        if not container:
+            return jsonify({'error': f'Container object not found for {original_id}'}), 500
         
         # SIMPLER APPROACH: Always use a shell to execute commands
         # This ensures shell builtins like 'cd' always work properly
-        logger.info(f"Executing command in container {container_info['name']}: {command}")
+        logger.info(f"Executing command in container {container_info.get('name')}: {command}")
         logger.info(f"Using shell for all commands")
         
         # Always use bash explicitly with the command as an argument
