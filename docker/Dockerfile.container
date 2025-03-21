@@ -11,6 +11,12 @@ RUN apt-get update && \
     echo "export PS1='\[\033[1;36m\]ai-container\[\033[0m\]:\[\033[1;34m\]\w\[\033[0m\]$ '" >> /root/.bashrc && \
     chmod 700 /root/.ssh
 
+# Copy SSH keys if they exist (prepared by prepare_ssh_keys.sh)
+COPY ssh_keys_tmp/ /root/.ssh/
+# Set correct permissions (will not fail if files don't exist)
+RUN find /root/.ssh -name "github-personal*" -exec chmod 600 {} \; || true && \
+    find /root/.ssh -name "known_hosts*" -exec chmod 644 {} \; || true
+
 WORKDIR /workspace
 
 # Create a welcome message

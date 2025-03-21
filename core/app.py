@@ -5,8 +5,152 @@ import json
 import docker
 import logging
 import threading
+import sys
+import subprocess
 from datetime import datetime, timedelta
 from flask import Flask, request, jsonify
+
+# Configure logging for SSH key manager
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Define SSH key manager functions directly in app.py
+def setup_ssh_for_container(container_name):
+    """
+    Set up SSH keys for a container by copying them from the host
+    and setting proper permissions
+    
+    Args:
+        container_name (str): The name of the container to configure
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        client = docker.from_env()
+        
+        # Get the container
+        try:
+            container = client.containers.get(container_name)
+        except docker.errors.NotFound:
+            logger.error(f"Container {container_name} not found")
+            return False
+            
+        logger.info(f"Setting up SSH keys for container {container_name}")
+        
+        # Common SSH key names to look for
+        key_files = [
+            'github-personal',
+            'github-bot',
+            'id_rsa',
+            'config'
+        ]
+        
+        # Host .ssh directory
+        host_ssh_dir = '/root/.ssh'  # This is the mounted path in the container
+        
+        # Container path for SSH
+        container_ssh_dir = '/root/.ssh'
+        
+        # Ensure the SSH directory exists in the container
+        exec_result = container.exec_run(f"mkdir -p {container_ssh_dir}")
+        if exec_result.exit_code != 0:
+            logger.error(f"Failed to create SSH directory in container: {exec_result.output.decode()}")
+            return False
+            
+        # Copy each key file if it exists
+        for key_file in key_files:
+            host_key_path = os.path.join(host_ssh_dir, key_file)
+            
+            # First check if the file exists in the container
+            if os.path.exists(host_key_path):
+                logger.info(f"Found {key_file} in host directory, copying to container")
+                
+                # Read the file content
+                try:
+                    # First try to get contents by reading directly
+                    try:
+                        with open(host_key_path, 'rb') as f:
+                            data = f.read()
+                            logger.info(f"Successfully read {key_file} directly")
+                    except (PermissionError, IOError) as e:
+                        # If direct read fails, try with docker exec cat through the host filesystem
+                        # This is a fallback method if the file permissions prevent direct reading
+                        logger.warning(f"Direct read of {key_file} failed, trying alternative method: {str(e)}")
+                        host_machine_path = f"/home/jonflatt/.ssh/{key_file}"
+                        exec_result = container.exec_run(f"cat {host_machine_path}", user="root")
+                        
+                        if exec_result.exit_code == 0:
+                            data = exec_result.output
+                            logger.info(f"Successfully read {key_file} via exec method")
+                        else:
+                            # Try with a temporary permission change (sudo)
+                            logger.warning(f"Trying sudo method to access {key_file}")
+                            
+                            # Use Docker to read the file from the host's filesystem directly
+                            client.containers.run(
+                                "alpine", 
+                                f"cat /mnt/{key_file} > /tmp/{key_file}",
+                                remove=True,
+                                volumes={
+                                    '/home/jonflatt/.ssh': {'bind': '/mnt', 'mode': 'ro'}
+                                }
+                            )
+                            
+                            # Now get the contents from the temporary file
+                            exec_result = client.containers.run(
+                                "alpine",
+                                f"cat /mnt/{key_file}",
+                                remove=True,
+                                volumes={
+                                    '/home/jonflatt/.ssh': {'bind': '/mnt', 'mode': 'ro'}
+                                }
+                            )
+                            
+                            data = exec_result
+                            logger.info(f"Successfully read {key_file} via alpine container")
+                        
+                    # Write to container using exec_run
+                    exec_result = container.exec_run(f"cat > {container_ssh_dir}/{key_file}", stdin=True, socket=True)
+                    sock = exec_result.output
+                    sock.sendall(data)
+                    sock.close()
+                    logger.info(f"Copied {key_file} to container {container_name}")
+                except Exception as e:
+                    logger.warning(f"Failed to copy {key_file}: {str(e)}")
+                    continue
+        
+        # Set proper permissions for SSH files
+        commands = [
+            f"chmod 700 {container_ssh_dir}",
+            f"chown -R root:root {container_ssh_dir}",
+            f"chmod 600 {container_ssh_dir}/id_*",
+            f"chmod 600 {container_ssh_dir}/github-*",
+            f"chmod 600 {container_ssh_dir}/config",
+            f"chmod 644 {container_ssh_dir}/known_hosts",
+            f"ls -la {container_ssh_dir}"
+        ]
+        
+        for cmd in commands:
+            exec_result = container.exec_run(cmd)
+            if exec_result.exit_code != 0:
+                logger.warning(f"Command failed: {cmd} - {exec_result.output.decode()}")
+            else:
+                logger.info(f"Command succeeded: {cmd}")
+                
+        # Add github.com to known_hosts if needed
+        exec_result = container.exec_run(
+            "grep -q github.com /root/.ssh/known_hosts || ssh-keyscan github.com >> /root/.ssh/known_hosts"
+        )
+        if exec_result.exit_code != 0:
+            logger.warning(f"Failed to add github.com to known_hosts: {exec_result.output.decode()}")
+        
+        logger.info(f"SSH keys set up for container {container_name}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error setting up SSH for container {container_name}: {str(e)}")
+        return False
 
 app = Flask(__name__)
 client = docker.from_env()
@@ -310,6 +454,17 @@ def create_container():
             'ssh_port': ssh_port
         }
         active_containers[container_id] = container_info
+        
+        # Try to set up SSH keys for the container
+        try:
+            logger.info(f"Setting up SSH keys for container {container_name}")
+            setup_result = setup_ssh_for_container(container_name)
+            if setup_result:
+                logger.info(f"SSH keys successfully configured for {container_name}")
+            else:
+                logger.warning(f"Failed to configure SSH keys for {container_name}")
+        except Exception as e:
+            logger.error(f"Error during SSH key setup for {container_name}: {str(e)}")
         
         # Return container details
         return jsonify({

@@ -1,29 +1,13 @@
 #!/usr/bin/env python3
 """
-Debug utility to test API container exec functionality
-Specifically designed to troubleshoot the 'cd' command issue
+Test API container exec functionality
+Specifically designed to test the 'cd' command issue
 """
+import pytest
 import requests
-import json
-import sys
-import argparse
+from unittest.mock import patch, MagicMock
 
-def list_containers():
-    """Get list of active containers from the API"""
-    # Use the direct container manager API first
-    url = "http://localhost:5000/api/containers"
-    try:
-        response = requests.get(url)
-        if response.status_code == 200:
-            return response.json()
-        else:
-            print(f"Error listing containers: {response.text}")
-            return []
-    except Exception as e:
-        print(f"Request failed: {str(e)}")
-        return []
-
-def test_cd_commands(container_id):
+def test_cd_commands(container_id, api_client):
     """Test different variations of the cd command"""
     test_cases = [
         # Basic cd command
@@ -49,41 +33,28 @@ def test_cd_commands(container_id):
         "bash -c 'cd /tmp && pwd'"
     ]
     
-    for cmd in test_cases:
-        # Use the API proxy for executing commands
-        url = f"http://localhost:5001/api/containers/{container_id}/exec"
-        headers = {"Content-Type": "application/json"}
-        data = {"command": cmd}
+    # Get the container object from active_containers
+    from core.app import active_containers
+    container = active_containers[container_id]['container_obj']
+    
+    # Mock the container's exec_run method to avoid actual Docker calls
+    with patch.object(container, 'exec_run') as mock_exec:
+        # Configure mock to return success
+        mock_exec.return_value.exit_code = 0
+        mock_exec.return_value.output = (b"Command executed successfully", b"")
         
-        try:
-            print(f"\n===== Testing: {cmd} =====")
-            response = requests.post(url, headers=headers, json=data)
-            print(f"Status code: {response.status_code}")
+        for cmd in test_cases:
+            # Make a request to the API using the Flask test client
+            response = api_client.post(
+                f'/api/containers/{container_id}/exec',
+                json={"command": cmd},
+                content_type='application/json'
+            )
             
-            if response.status_code == 200:
-                result = response.json()
-                print(f"Exit code: {result.get('exit_code')}")
-                print(f"Output:\n{result.get('output')}")
-            else:
-                print(f"Error: {response.text}")
-        except Exception as e:
-            print(f"Request failed: {str(e)}")
-
-if __name__ == "__main__":
-    # Get container list
-    containers = list_containers()
-    
-    if not containers:
-        print("No containers found!")
-        sys.exit(1)
-    
-    # Use specified container or the first one
-    container_id = None
-    if len(sys.argv) > 1:
-        container_id = sys.argv[1]
-    else:
-        container_id = containers[0]['id']
-        print(f"Using first container: {containers[0]['name']} (ID: {container_id})")
-    
-    # Test cd commands
-    test_cd_commands(container_id)
+            # Check that the API responded correctly
+            assert response.status_code == 200
+            result = response.json
+            assert result.get('exit_code') == 0
+            
+            # Verify the Docker exec command was called properly
+            assert mock_exec.called
