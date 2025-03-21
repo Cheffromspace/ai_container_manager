@@ -12,43 +12,92 @@ import urllib.parse
 from urllib.request import Request, urlopen
 import re
 import threading
+import logging
+from core.utils import validate_container_identifier
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Global settings
 PROXY_PORT = 5001
 TARGET_API = "http://localhost:5000"
 
+def find_docker_binary():
+    """
+    Find the docker binary path
+    
+    Returns:
+        str or None: Path to the docker binary if found, None otherwise
+    """
+    docker_paths = ["/usr/bin/docker", "/usr/local/bin/docker", "docker"]
+    for path in docker_paths:
+        try:
+            result = subprocess.run([path, "--version"], capture_output=True, text=True)
+            if result.returncode == 0:
+                return path
+        except FileNotFoundError:
+            continue
+    return None
+
+# Import shared container lookup functions
+from core.utils import find_container, find_container_by_id, find_container_by_name
+
 class DirectExecutor:
     @staticmethod
-    def exec_command(container_id, command):
-        """Execute a command in a container using Docker directly"""
-        # Always use bash -c to ensure shell builtins work
-        # Try multiple possible paths for docker binary
-        docker_paths = ["/usr/bin/docker", "/usr/local/bin/docker", "docker"]
+    def exec_command(container_identifier, command):
+        """Execute a command in a container using Docker directly
         
-        for docker_path in docker_paths:
-            try:
-                exec_cmd = [docker_path, "exec", container_id, "/bin/bash", "-c", command]
-                result = subprocess.run(exec_cmd, capture_output=True, text=True)
-                
-                # Format the response like the API would
-                return {
-                    "exit_code": result.returncode,
-                    "output": result.stdout if result.stdout else result.stderr if result.stderr else ""
-                }
-            except FileNotFoundError:
-                # Try the next path
-                continue
-            except Exception as e:
-                return {
-                    "exit_code": 1,
-                    "output": f"Error: {str(e)}"
-                }
+        Args:
+            container_identifier: Either a container ID or name
+            command: The command to execute
+        """
+        # Validate the identifier
+        if not validate_container_identifier(container_identifier):
+            logger.warning(f"Invalid container identifier format: {container_identifier}")
+            return {
+                "exit_code": 1,
+                "output": f"Error: Invalid container identifier format: {container_identifier}"
+            }
         
-        # If we get here, Docker wasn't found in any location
-        return {
-            "exit_code": 1,
-            "output": "Error: Docker command not found. Please ensure Docker is installed and in the PATH."
-        }
+        # Find docker binary path
+        docker_path = find_docker_binary()
+        if not docker_path:
+            return {
+                "exit_code": 1,
+                "output": "Error: Docker command not found. Please ensure Docker is installed and in the PATH."
+            }
+        
+        # Find the container
+        container_exists, actual_container_id = find_container(docker_path, container_identifier)
+        
+        # If container not found, return error
+        if not container_exists:
+            return {
+                "exit_code": 1,
+                "output": f"Error: Container '{container_identifier}' not found."
+            }
+        
+        # Execute the command using the determined container identifier
+        try:
+            exec_cmd = [docker_path, "exec", actual_container_id, "/bin/bash", "-c", command]
+            result = subprocess.run(exec_cmd, capture_output=True, text=True)
+            
+            # Format the response like the API would
+            return {
+                "exit_code": result.returncode,
+                "output": result.stdout if result.stdout else result.stderr if result.stderr else ""
+            }
+        except FileNotFoundError:
+            return {
+                "exit_code": 1,
+                "output": "Error: Docker command not found. Please ensure Docker is installed and in the PATH."
+            }
+        except Exception as e:
+            return {
+                "exit_code": 1,
+                "output": f"Error: {str(e)}"
+            }
 
 class APIProxyHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
@@ -85,7 +134,7 @@ class APIProxyHandler(http.server.BaseHTTPRequestHandler):
                 return
             
             # Execute the command
-            print(f"Executing command in container {container_id}: {command}")
+            logger.info(f"Executing command in container {container_id}: {command}")
             result = DirectExecutor.exec_command(container_id, command)
             
             # Send the response
@@ -128,24 +177,29 @@ class APIProxyHandler(http.server.BaseHTTPRequestHandler):
         except Exception as e:
             self.send_error(502, f"Error forwarding request: {str(e)}")
 
-def check_container_exists(container_id):
-    """Check if a container exists"""
-    # Try multiple possible paths for docker binary
-    docker_paths = ["/usr/bin/docker", "/usr/local/bin/docker", "docker"]
+def check_container_exists(container_identifier):
+    """Check if a container exists by ID or name
     
-    for docker_path in docker_paths:
-        try:
-            cmd = [docker_path, "ps", "-a", "--filter", f"id={container_id}", "--format", "{{.ID}}"]
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            return result.stdout.strip() != ""
-        except FileNotFoundError:
-            # Try the next path
-            continue
-        except Exception:
-            return False
+    Args:
+        container_identifier: Either a container ID or name
+        
+    Returns:
+        bool: True if container exists, False otherwise
+    """
+    # Validate the identifier
+    if not validate_container_identifier(container_identifier):
+        logger.warning(f"Invalid container identifier format: {container_identifier}")
+        return False
     
-    # If we get here, Docker wasn't found in any location
-    return False
+    # Find the docker binary
+    docker_path = find_docker_binary()
+    if not docker_path:
+        logger.error("Docker binary not found")
+        return False
+    
+    # Use the same container lookup code from other functions
+    container_exists, _ = find_container(docker_path, container_identifier)
+    return container_exists
 
 def print_usage_instructions():
     print(f"\nAPI Proxy is running on port {PROXY_PORT}")
