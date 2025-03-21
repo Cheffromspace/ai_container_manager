@@ -39,7 +39,7 @@ class DirectExecutor:
             os.chmod(wrapper_script, 0o755)
             
             # Find the container
-            container_exists, actual_container_id = find_container(wrapper_script, container_identifier)
+            container_exists, actual_container_id = find_container(wrapper_script, container_identifier, print_logger)
             
             # If container not found, return error
             if not container_exists:
@@ -150,87 +150,13 @@ class APIProxyHandler(http.server.BaseHTTPRequestHandler):
         except Exception as e:
             self.send_error(502, f"Error forwarding request: {str(e)}")
 
-def find_container_by_id(wrapper_script, container_id):
-    """
-    Find a container by its ID using the wrapper script
-    
-    Args:
-        wrapper_script (str): Path to the docker wrapper script
-        container_id (str): Container ID to find
-        
-    Returns:
-        tuple: (bool, str) - (True if found, container ID if found)
-    """
-    try:
-        cmd = [wrapper_script, "ps", "-a", "--filter", f"id={container_id}", "--format", "{{.ID}}"]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        found_id = result.stdout.strip()
-        return (found_id != "", found_id)
-    except Exception as e:
-        print(f"Error checking container by ID: {str(e)}")
-        return (False, "")
+# Import shared container lookup functions
+# Use a custom logger function since this file uses print instead of logger
+from core.utils import find_container, find_container_by_id, find_container_by_name, validate_container_identifier
 
-def find_container_by_name(wrapper_script, container_name):
-    """
-    Find a container by its name using the wrapper script
-    
-    Args:
-        wrapper_script (str): Path to the docker wrapper script
-        container_name (str): Container name to find
-        
-    Returns:
-        tuple: (bool, str) - (True if found, container ID if found)
-    """
-    try:
-        # Get all container IDs and names for exact matching
-        cmd = [wrapper_script, "ps", "-a", "--format", "{{.ID}}|{{.Names}}"]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        
-        # Parse the output into a dictionary of names to IDs
-        containers = {}
-        for line in result.stdout.strip().split('\n'):
-            if line and '|' in line:
-                container_id, container_name_from_cmd = line.split('|', 1)
-                containers[container_name_from_cmd] = container_id
-        
-        # Check for exact name match
-        if container_name in containers:
-            return (True, containers[container_name])
-            
-        # Try with ai-container- prefix if not already using it
-        if not container_name.startswith("ai-container-"):
-            prefixed_name = f"ai-container-{container_name}"
-            if prefixed_name in containers:
-                return (True, containers[prefixed_name])
-                
-        return (False, "")
-    except Exception as e:
-        print(f"Error checking container by name: {str(e)}")
-        return (False, "")
-
-def find_container(wrapper_script, container_identifier):
-    """
-    Find a container by ID or name using the wrapper script
-    
-    Args:
-        wrapper_script (str): Path to the docker wrapper script
-        container_identifier (str): Container ID or name to find
-        
-    Returns:
-        tuple: (bool, str) - (True if found, container ID if found)
-    """
-    # Try to find by ID first
-    found_by_id, container_id = find_container_by_id(wrapper_script, container_identifier)
-    if found_by_id:
-        return (True, container_id)
-    
-    # If not found by ID, try to find by name
-    found_by_name, container_id = find_container_by_name(wrapper_script, container_identifier)
-    if found_by_name:
-        return (True, container_id)
-    
-    # Container not found
-    return (False, "")
+# Define a print-based logger for consistency
+def print_logger(message):
+    print(message)
 
 def check_container_exists(container_id):
     """Check if a container exists by ID or name
@@ -251,7 +177,7 @@ def check_container_exists(container_id):
         os.chmod(wrapper_script, 0o755)
         
         # Use the container lookup code
-        container_exists, _ = find_container(wrapper_script, container_id)
+        container_exists, _ = find_container(wrapper_script, container_id, print_logger)
         return container_exists
     except Exception as e:
         print(f"Error checking container existence: {str(e)}")

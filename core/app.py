@@ -226,7 +226,9 @@ def get_container_by_identifier(container_identifier):
         
         # Also check with ai-container- prefix if not already using it
         if not container_identifier.startswith("ai-container-"):
-            if info.get('name') == f"ai-container-{container_identifier}":
+            prefixed_name = f"ai-container-{container_identifier}"
+            # Validate the prefixed name as well
+            if validate_container_identifier(prefixed_name) and info.get('name') == prefixed_name:
                 return container_id, info
     
     # Not found in tracked containers, try to look in Docker directly
