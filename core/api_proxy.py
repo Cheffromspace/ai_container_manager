@@ -40,7 +40,87 @@ def find_docker_binary():
             continue
     return None
 
-# Using validate_container_identifier from core.utils
+def find_container_by_id(docker_path, container_id):
+    """
+    Find a container by its ID
+    
+    Args:
+        docker_path (str): Path to the docker binary
+        container_id (str): Container ID to find
+        
+    Returns:
+        tuple: (bool, str) - (True if found, container ID if found)
+    """
+    try:
+        cmd = [docker_path, "ps", "-a", "--filter", f"id={container_id}", "--format", "{{.ID}}"]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        found_id = result.stdout.strip()
+        return (found_id != "", found_id)
+    except Exception as e:
+        logger.error(f"Error checking container by ID: {str(e)}")
+        return (False, "")
+
+def find_container_by_name(docker_path, container_name):
+    """
+    Find a container by its name, including with ai-container- prefix if needed
+    
+    Args:
+        docker_path (str): Path to the docker binary
+        container_name (str): Container name to find
+        
+    Returns:
+        tuple: (bool, str) - (True if found, container ID if found)
+    """
+    try:
+        # Get all container IDs and names for exact matching
+        cmd = [docker_path, "ps", "-a", "--format", "{{.ID}}|{{.Names}}"]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        # Parse the output into a dictionary of names to IDs
+        containers = {}
+        for line in result.stdout.strip().split('\n'):
+            if line and '|' in line:
+                container_id, container_name_from_cmd = line.split('|', 1)
+                containers[container_name_from_cmd] = container_id
+        
+        # Check for exact name match
+        if container_name in containers:
+            return (True, containers[container_name])
+            
+        # Try with ai-container- prefix if not already using it
+        if not container_name.startswith("ai-container-"):
+            prefixed_name = f"ai-container-{container_name}"
+            if prefixed_name in containers:
+                return (True, containers[prefixed_name])
+                
+        return (False, "")
+    except Exception as e:
+        logger.error(f"Error checking container by name: {str(e)}")
+        return (False, "")
+
+def find_container(docker_path, container_identifier):
+    """
+    Find a container by ID or name
+    
+    Args:
+        docker_path (str): Path to the docker binary
+        container_identifier (str): Container ID or name to find
+        
+    Returns:
+        tuple: (bool, str) - (True if found, container ID if found)
+    """
+    # Try to find by ID first
+    found_by_id, container_id = find_container_by_id(docker_path, container_identifier)
+    if found_by_id:
+        return (True, container_id)
+    
+    # If not found by ID, try to find by name
+    found_by_name, container_id = find_container_by_name(docker_path, container_identifier)
+    if found_by_name:
+        return (True, container_id)
+    
+    # Container not found
+    return (False, "")
 
 class DirectExecutor:
     @staticmethod
@@ -59,7 +139,6 @@ class DirectExecutor:
                 "output": f"Error: Invalid container identifier format: {container_identifier}"
             }
         
-        # Always use bash -c to ensure shell builtins work
         # Find docker binary path
         docker_path = find_docker_binary()
         if not docker_path:
@@ -68,56 +147,16 @@ class DirectExecutor:
                 "output": "Error: Docker command not found. Please ensure Docker is installed and in the PATH."
             }
         
-        # First determine if we're dealing with a container ID or name
-        container_exists_by_id = False
-        container_exists_by_name = False
-        actual_container_id = container_identifier
+        # Find the container
+        container_exists, actual_container_id = find_container(docker_path, container_identifier)
         
-        # Check if the container exists by ID first
-        try:
-            check_cmd = [docker_path, "ps", "-a", "--filter", f"id={container_identifier}", "--format", "{{.ID}}"]
-            result = subprocess.run(check_cmd, capture_output=True, text=True)
-            if result.stdout.strip():
-                container_exists_by_id = True
-        except Exception as e:
-            logger.error(f"Error checking container by ID: {str(e)}")
-            # Continue to next method
-                
-        # If not found by ID, try to find by name with exact matching
-        if not container_exists_by_id:
-            try:
-                # Get all container IDs and names for exact matching
-                check_cmd = [docker_path, "ps", "-a", "--format", "{{.ID}}|{{.Names}}"]
-                result = subprocess.run(check_cmd, capture_output=True, text=True)
-                
-                # Parse the output into a dictionary of names to IDs
-                containers = {}
-                for line in result.stdout.strip().split('\n'):
-                    if line and '|' in line:
-                        container_id, container_name = line.split('|', 1)
-                        containers[container_name] = container_id
-                
-                # Check for exact name match
-                if container_identifier in containers:
-                    container_exists_by_name = True
-                    actual_container_id = containers[container_identifier]
-                # Try with ai-container- prefix if not already using it
-                elif not container_identifier.startswith("ai-container-"):
-                    prefixed_name = f"ai-container-{container_identifier}"
-                    if prefixed_name in containers:
-                        container_exists_by_name = True
-                        actual_container_id = containers[prefixed_name]
-            except Exception as e:
-                logger.error(f"Error checking container by name: {str(e)}")
-                # Continue to next method
-                    
-        # If container not found by any method, return error
-        if not container_exists_by_id and not container_exists_by_name:
+        # If container not found, return error
+        if not container_exists:
             return {
                 "exit_code": 1,
                 "output": f"Error: Container '{container_identifier}' not found."
             }
-                    
+        
         # Execute the command using the determined container identifier
         try:
             exec_cmd = [docker_path, "exec", actual_container_id, "/bin/bash", "-c", command]
@@ -237,41 +276,9 @@ def check_container_exists(container_identifier):
         logger.error("Docker binary not found")
         return False
     
-    # Try to find by ID first - this is already exact matching
-    try:
-        cmd = [docker_path, "ps", "-a", "--filter", f"id={container_identifier}", "--format", "{{.ID}}"]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.stdout.strip() != "":
-            return True
-    except FileNotFoundError:
-        logger.error("Docker command not found")
-        return False
-    except Exception as e:
-        logger.error(f"Error checking container by ID: {str(e)}")
-        # Continue to next method
-    
-    # If not found by ID, get all containers and check for exact name matches
-    try:
-        # Get all container IDs and names
-        cmd = [docker_path, "ps", "-a", "--format", "{{.Names}}"]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        
-        container_names = [name.strip() for name in result.stdout.strip().split('\n') if name.strip()]
-        
-        # Check for exact name match
-        if container_identifier in container_names:
-            return True
-            
-        # Try with ai-container- prefix if not already using it
-        if not container_identifier.startswith("ai-container-"):
-            prefixed_name = f"ai-container-{container_identifier}"
-            if prefixed_name in container_names:
-                return True
-    except Exception as e:
-        logger.error(f"Error checking container by name: {str(e)}")
-    
-    # If we get here, the container wasn't found
-    return False
+    # Use the same container lookup code from other functions
+    container_exists, _ = find_container(docker_path, container_identifier)
+    return container_exists
 
 def print_usage_instructions():
     print(f"\nAPI Proxy is running on port {PROXY_PORT}")
