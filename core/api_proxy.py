@@ -13,6 +13,7 @@ from urllib.request import Request, urlopen
 import re
 import threading
 import logging
+from core.utils import validate_container_identifier
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -39,22 +40,7 @@ def find_docker_binary():
             continue
     return None
 
-def validate_container_identifier(identifier):
-    """
-    Validate container identifier format to prevent injection
-    
-    Args:
-        identifier (str): The container identifier to validate
-        
-    Returns:
-        bool: True if valid, False otherwise
-    """
-    # Only allow alphanumeric chars, dashes and underscores
-    if not isinstance(identifier, str):
-        return False
-    if not re.match(r'^[a-zA-Z0-9_\-]+$', identifier):
-        return False
-    return True
+# Using validate_container_identifier from core.utils
 
 class DirectExecutor:
     @staticmethod

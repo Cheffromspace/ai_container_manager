@@ -10,6 +10,7 @@ import subprocess
 import re
 from datetime import datetime, timedelta
 from flask import Flask, request, jsonify
+from core.utils import validate_container_identifier
 
 # Configure logging for SSH key manager
 logging.basicConfig(level=logging.INFO)
@@ -166,22 +167,7 @@ active_containers = {}
 # Container expiration time in hours
 CONTAINER_EXPIRY_HOURS = 2
 
-def validate_container_identifier(identifier):
-    """
-    Validate container identifier format to prevent injection
-    
-    Args:
-        identifier (str): The container identifier to validate
-        
-    Returns:
-        bool: True if valid, False otherwise
-    """
-    # Only allow alphanumeric chars, dashes and underscores
-    if not isinstance(identifier, str):
-        return False
-    if not re.match(r'^[a-zA-Z0-9_\-]+$', identifier):
-        return False
-    return True
+# Using validate_container_identifier from core.utils
 
 def get_container_by_identifier(container_identifier):
     """
