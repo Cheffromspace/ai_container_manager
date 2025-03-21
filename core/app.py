@@ -202,7 +202,7 @@ def get_container_by_identifier(container_identifier):
     if container_identifier in active_containers:
         return container_identifier, active_containers[container_identifier]
     
-    # Try to find by name
+    # Try to find by name with exact matching
     for container_id, info in active_containers.items():
         if info.get('name') == container_identifier:
             return container_id, info
@@ -215,14 +215,25 @@ def get_container_by_identifier(container_identifier):
     # Not found in tracked containers, try to look in Docker directly
     try:
         client = docker.from_env()
-        # Try by name first
-        filters = {"name": container_identifier}
-        containers = client.containers.list(all=True, filters=filters)
+        # Try by exact name first
+        containers = []
         
+        # Get all containers first to filter manually for exact matches
+        all_containers = client.containers.list(all=True)
+        
+        # Check for exact name match
+        for container in all_containers:
+            if container.name == container_identifier:
+                containers = [container]
+                break
+                
+        # If not found and doesn't have prefix, try with ai-container- prefix
         if not containers and not container_identifier.startswith("ai-container-"):
-            # Try with ai-container prefix
-            filters = {"name": f"ai-container-{container_identifier}"}
-            containers = client.containers.list(all=True, filters=filters)
+            prefixed_name = f"ai-container-{container_identifier}"
+            for container in all_containers:
+                if container.name == prefixed_name:
+                    containers = [container]
+                    break
             
         if containers:
             # Found container in Docker but not in our tracking
