@@ -169,6 +169,37 @@ CONTAINER_EXPIRY_HOURS = 2
 
 # Using validate_container_identifier from core.utils
 
+def handle_untracked_container(container_obj, operation="used"):
+    """Handle an untracked container consistently across endpoints
+    
+    Args:
+        container_obj: The Docker container object
+        operation: String describing what happened (for logging)
+        
+    Returns:
+        bool: True if container is now tracked, False otherwise
+    """
+    if not container_obj:
+        return False
+        
+    logger.info(f"Untracked container {container_obj.name} {operation}, refreshing container tracking")
+    
+    # Store info about current container to check if it gets added to tracking
+    container_id = container_obj.id
+    container_name = container_obj.name
+    
+    # Refresh container tracking
+    handle_existing_containers()
+    
+    # Check if container is now tracked
+    for tracked_id, info in active_containers.items():
+        if info.get('container_obj', {}).id == container_id or info.get('name') == container_name:
+            logger.info(f"Container {container_name} is now being tracked after refresh")
+            return True
+    
+    logger.warning(f"Container {container_name} is still not being tracked after refresh")
+    return False
+
 def get_container_by_identifier(container_identifier):
     """
     Get a container by ID or name
@@ -573,8 +604,12 @@ def delete_container(container_id):
         container.stop()
         container.remove()
         
-        # Remove from active containers if it's tracked
-        if not container_info.get('untracked', False) and container_id in active_containers:
+        # Handle container tracking consistently
+        if container_info.get('untracked', False):
+            # Try to track the container before confirming it's gone
+            handle_untracked_container(container, "deleted")
+        elif container_id in active_containers:
+            # Container is already tracked, simply remove from tracking
             del active_containers[container_id]
         
         return jsonify({'message': f'Container {original_id} deleted successfully'}), 200
@@ -619,18 +654,18 @@ def restart_container(container_id):
         container.reload()
         new_status = container.status
         
-        # If this is an untracked container, try to add it to tracking
+        # Handle container tracking consistently
         if container_info.get('untracked', False):
-            # Trigger a refresh of container tracking to include this container
-            handle_existing_containers()
-            logger.info(f"Refreshed container tracking after restarting untracked container {container_name}")
+            # Try to track the container using our helper function
+            is_tracked = handle_untracked_container(container, "restarted")
             
             # Update response message
             return jsonify({
-                'message': f'Container {original_id} restarted successfully and tracking refreshed',
+                'message': f'Container {original_id} restarted successfully and tracking {"updated" if is_tracked else "attempted"}',
                 'name': container_name,
                 'previous_status': old_status,
-                'current_status': new_status
+                'current_status': new_status,
+                'now_tracked': is_tracked
             }), 200
         else:
             # Update tracked status for tracked containers
@@ -716,9 +751,15 @@ def exec_command(container_id):
         # Log the result for debugging
         logger.info(f"Command execution result: exit_code={exit_code}, output_length={len(output)}")
         
+        # Handle untracked containers - attempt to add to tracking if used
+        tracking_updated = False
+        if container_info.get('untracked', False):
+            tracking_updated = handle_untracked_container(container, "executed command in")
+            
         return jsonify({
             'exit_code': exit_code,
-            'output': output
+            'output': output,
+            'tracking_updated': tracking_updated if container_info.get('untracked', False) else None
         })
     
     except Exception as e:
