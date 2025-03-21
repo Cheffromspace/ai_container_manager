@@ -106,14 +106,13 @@ class DirectExecutor:
                 if result.stdout.strip():
                     container_exists_by_name = True
                     actual_container_id = result.stdout.strip()
-                    
-                    # Try with ai-container- prefix if not already using it
-                    if not container_exists_by_name and not container_identifier.startswith("ai-container-"):
-                        check_cmd = [docker_path, "ps", "-a", "--filter", f"name=ai-container-{container_identifier}", "--format", "{{.ID}}"]
-                        result = subprocess.run(check_cmd, capture_output=True, text=True)
-                        if result.stdout.strip():
-                            container_exists_by_name = True
-                            actual_container_id = result.stdout.strip()
+                # Try with ai-container- prefix if not already using it
+                elif not container_identifier.startswith("ai-container-"):
+                    check_cmd = [docker_path, "ps", "-a", "--filter", f"name=ai-container-{container_identifier}", "--format", "{{.ID}}"]
+                    result = subprocess.run(check_cmd, capture_output=True, text=True)
+                    if result.stdout.strip():
+                        container_exists_by_name = True
+                        actual_container_id = result.stdout.strip()
             except Exception as e:
                 logger.error(f"Error checking container by name: {str(e)}")
                 # Continue to next method
