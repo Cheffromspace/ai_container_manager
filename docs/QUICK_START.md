@@ -2,6 +2,16 @@
 
 This guide will help you quickly get started with the AI Container Manager for n8n.
 
+## Prerequisites
+
+- Docker and Docker Compose installed
+- Docker socket accessible for container mounting
+- Python package requirements (handled by Docker build):
+  - Flask 2.3.3
+  - Docker SDK for Python 7.1.0
+  - Requests 2.32.2
+  - PyJWT 2.10.1
+
 ## Setting Up
 
 1. **Build the container images:**
@@ -16,6 +26,7 @@ chmod +x build-images.sh
 
 ```bash
 cd /home/jonflatt/n8n
+# Ensure Docker socket is shared with the container
 docker-compose up -d ai-container-manager
 ```
 
@@ -23,6 +34,12 @@ docker-compose up -d ai-container-manager
 
 ```bash
 curl http://localhost:5000/api/containers
+```
+
+4. **Check the logs to ensure Docker connection is successful:**
+
+```bash
+docker-compose logs ai-container-manager | grep "Docker connection successful"
 ```
 
 ## Using the n8n Workflow

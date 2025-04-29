@@ -118,6 +118,10 @@ class APIProxyHandler(http.server.BaseHTTPRequestHandler):
             # Forward to the original API
             self.proxy_request("POST")
     
+    def do_DELETE(self):
+        """Forward DELETE requests to the target API"""
+        self.proxy_request("DELETE")
+    
     def handle_exec(self, container_id):
         """Handle the exec endpoint directly using Docker"""
         # Get the request body
