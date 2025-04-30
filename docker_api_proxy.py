@@ -22,8 +22,13 @@ TARGET_API = "http://localhost:5000"
 
 class DirectExecutor:
     @staticmethod
-    def exec_command(container_id, command):
-        """Execute a command in a container using Docker directly"""
+    def exec_command(container_identifier, command):
+        """Execute a command in a container using Docker directly
+        
+        Args:
+            container_identifier: Either a container ID or name
+            command: The command to execute
+        """
         # Get the current directory where this script is located
         script_dir = os.path.dirname(os.path.abspath(__file__))
         # Create path to the docker_wrapper.sh script
@@ -33,8 +38,18 @@ class DirectExecutor:
             # Ensure the wrapper script is executable
             os.chmod(wrapper_script, 0o755)
             
+            # Find the container
+            container_exists, actual_container_id = find_container(wrapper_script, container_identifier, print_logger)
+            
+            # If container not found, return error
+            if not container_exists:
+                return {
+                    "exit_code": 1,
+                    "output": f"Error: Container '{container_identifier}' not found."
+                }
+            
             # Use the wrapper script to execute docker commands
-            exec_cmd = [wrapper_script, "exec", container_id, "/bin/bash", "-c", command]
+            exec_cmd = [wrapper_script, "exec", actual_container_id, "/bin/bash", "-c", command]
             print(f"Executing via wrapper: {' '.join(exec_cmd)}")
             result = subprocess.run(exec_cmd, capture_output=True, text=True)
             
@@ -135,8 +150,23 @@ class APIProxyHandler(http.server.BaseHTTPRequestHandler):
         except Exception as e:
             self.send_error(502, f"Error forwarding request: {str(e)}")
 
+# Import shared container lookup functions
+# Use a custom logger function since this file uses print instead of logger
+from core.utils import find_container, find_container_by_id, find_container_by_name, validate_container_identifier
+
+# Define a print-based logger for consistency
+def print_logger(message):
+    print(message)
+
 def check_container_exists(container_id):
-    """Check if a container exists"""
+    """Check if a container exists by ID or name
+    
+    Args:
+        container_id: Either a container ID or name
+        
+    Returns:
+        bool: True if container exists, False otherwise
+    """
     # Get the current directory where this script is located
     script_dir = os.path.dirname(os.path.abspath(__file__))
     # Create path to the docker_wrapper.sh script
@@ -146,10 +176,9 @@ def check_container_exists(container_id):
         # Ensure the wrapper script is executable
         os.chmod(wrapper_script, 0o755)
         
-        # Use the wrapper script to check if container exists
-        cmd = [wrapper_script, "ps", "-a", "--filter", f"id={container_id}", "--format", "{{.ID}}"]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        return result.stdout.strip() != ""
+        # Use the container lookup code
+        container_exists, _ = find_container(wrapper_script, container_id, print_logger)
+        return container_exists
     except Exception as e:
         print(f"Error checking container existence: {str(e)}")
         return False

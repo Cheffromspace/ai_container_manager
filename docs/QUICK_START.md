@@ -59,13 +59,15 @@ For simple commands:
 curl -X POST \
   -H "Content-Type: application/json" \
   -d '{"command":"echo hello"}' \
-  http://localhost:5000/api/containers/{container_id}/exec
+  http://localhost:5000/api/containers/{container_identifier}/exec
 
-# Alternative endpoint
+# Alternative endpoint 
 curl -X POST \
   -H "Content-Type: application/json" \
   -d '{"command":"echo hello"}' \
-  http://localhost:5000/api/containers/exec/{container_id}
+  http://localhost:5000/api/containers/exec/{container_identifier}
+
+# Note: container_identifier can be either the container ID or name
 ```
 
 For shell builtin commands or complex shell operations:
@@ -75,19 +77,19 @@ For shell builtin commands or complex shell operations:
 curl -X POST \
   -H "Content-Type: application/json" \
   -d '{"command":"/bin/bash -c \"cd ~ && pwd\""}' \
-  http://localhost:5000/api/containers/{container_id}/exec
+  http://localhost:5000/api/containers/{container_identifier}/exec
 
 # Using environment variables
 curl -X POST \
   -H "Content-Type: application/json" \
   -d '{"command":"/bin/bash -c \"echo $HOME\""}' \
-  http://localhost:5000/api/containers/{container_id}/exec
+  http://localhost:5000/api/containers/{container_identifier}/exec
   
 # Complex multi-step commands
 curl -X POST \
   -H "Content-Type: application/json" \
   -d '{"command":"/bin/bash -c \"cd /workspace && mkdir -p test && cd test && echo hello > file.txt && cat file.txt\""}' \
-  http://localhost:5000/api/containers/{container_id}/exec
+  http://localhost:5000/api/containers/{container_identifier}/exec
 ```
 
 **IMPORTANT:** For commands using:
@@ -99,19 +101,19 @@ curl -X POST \
 
 You MUST wrap the command with `/bin/bash -c` as shown in the examples above.
 
-Replace `{container_id}` with the actual container ID.
+Replace `{container_identifier}` with either the container ID or name.
 
 ### Deleting a Container
 
 ```bash
 # Original endpoint
-curl -X DELETE http://localhost:5000/api/containers/{container_id}
+curl -X DELETE http://localhost:5000/api/containers/{container_identifier}
 
 # Alternative endpoint
-curl -X DELETE http://localhost:5000/api/containers/delete/{container_id}
+curl -X DELETE http://localhost:5000/api/containers/delete/{container_identifier}
 ```
 
-Replace `{container_id}` with the actual container ID.
+Replace `{container_identifier}` with either the container ID or name.
 
 ### Getting Container Stats
 

@@ -140,7 +140,11 @@ Should return an empty array `[]` if no containers are running.
 
 ### Delete a Container
 
-**Endpoint:** `DELETE /api/containers/{container_id}`
+**Endpoint:** `DELETE /api/containers/{container_identifier}`
+
+The `container_identifier` can be either:
+- The container ID (e.g., `3a4b1c8e-1234-5678-90ab-cdef12345678` or a shortened version)
+- The container name (e.g., `ai-container-3a4b1c8e` or just `3a4b1c8e`)
 
 **Response:**
 ```json
@@ -151,7 +155,11 @@ Should return an empty array `[]` if no containers are running.
 
 ### Execute a Command in a Container
 
-**Endpoint:** `POST /api/containers/{container_id}/exec`
+**Endpoint:** `POST /api/containers/{container_identifier}/exec`
+
+The `container_identifier` can be either:
+- The container ID (e.g., `3a4b1c8e-1234-5678-90ab-cdef12345678` or a shortened version)
+- The container name (e.g., `ai-container-3a4b1c8e` or just `3a4b1c8e`)
 
 **Request Body:**
 ```json
