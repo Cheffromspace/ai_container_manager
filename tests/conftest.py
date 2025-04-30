@@ -17,13 +17,21 @@ mock_client = MagicMock()
 docker_mock.from_env.return_value = mock_client
 
 # Now import app with mocked docker
-from core.app import app, active_containers
+from core.app import app, active_containers, API_TOKENS
+
+# Make sure we have a test API key
+if 'test' not in API_TOKENS:
+    API_TOKENS['test'] = 'test-api-key-for-unit-tests'
 
 @pytest.fixture
 def api_client():
-    """Create a test client for the API"""
+    """Create a test client for the API with a valid API key"""
     app.config['TESTING'] = True
     with app.test_client() as client:
+        # Set the X-API-Key header for all requests
+        client.environ_base = {
+            'HTTP_X_API_KEY': API_TOKENS['test']
+        }
         yield client
 
 @pytest.fixture
