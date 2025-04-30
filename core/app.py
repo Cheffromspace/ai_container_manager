@@ -8,9 +8,14 @@ import threading
 import sys
 import subprocess
 import re
+import secrets
+from functools import wraps
 from datetime import datetime, timedelta
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, make_response
 from core.utils import validate_container_identifier
+
+# We'll use the Docker SDK directly
+# No CLI fallback - keeping it simple
 
 # Configure logging for SSH key manager
 logging.basicConfig(level=logging.INFO)
@@ -155,11 +160,87 @@ def setup_ssh_for_container(container_name):
         return False
 
 app = Flask(__name__)
-client = docker.from_env()
 
-# Configure logging
+# Configure logging first to ensure logs work
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Docker client initialization with explicit configuration
+# This is to fix the URL scheme error
+client = None  # Initialize to None to avoid undefined errors
+
+def initialize_docker_client():
+    """Initialize Docker client"""
+    global client
+    
+    try:
+        # Use the correct triple-slash format for Unix socket path
+        docker_host = os.environ.get('DOCKER_HOST', 'unix:///var/run/docker.sock')
+        logger.info(f"Connecting to Docker with: {docker_host}")
+        
+        # Initialize with explicit API version negotiation
+        client = docker.DockerClient(base_url=docker_host, version='auto')
+        
+        # Verify connection works by calling an API endpoint
+        version = client.version()
+        logger.info(f"Docker connection successful! API Version: {version.get('ApiVersion', 'unknown')}")
+        return True
+    except Exception as e:
+        logger.error(f"Error initializing Docker client: {str(e)}")
+        logger.error("Docker functionality will be limited.")
+        return False
+
+# Try to initialize the Docker client
+docker_successful = initialize_docker_client()
+if not docker_successful:
+    # Output clear error - we're not using fallbacks
+    logger.error("Docker SDK could not be initialized - container management will not work")
+    # Verify Docker CLI is available anyway, for informational purposes
+    try:
+        result = subprocess.run(["docker", "version", "--format", "{{.Server.Version}}"], 
+                               capture_output=True, text=True, check=True)
+        logger.info(f"Docker CLI is working. Server version: {result.stdout.strip()}")
+        logger.info("Consider restarting the container or checking Docker socket permissions")
+    except Exception as e:
+        logger.error(f"Docker CLI also failed: {str(e)}")
+        logger.error("Docker is not available at all - container creation will not work")
+
+# We've already set up logging above
+
+# API Authentication
+API_TOKENS = {}
+
+# Generate a secure API key or use a fixed one if provided
+def generate_api_key():
+    """Generate a secure random API key"""
+    return secrets.token_urlsafe(32)
+
+# Check if a pre-shared key is defined in environment
+DEFAULT_API_KEY = os.environ.get('API_KEY', None)
+
+if not DEFAULT_API_KEY:
+    # Generate a key if none is provided
+    DEFAULT_API_KEY = generate_api_key()
+    logger.info(f"Generated new random API key for startup")
+else:
+    logger.info(f"Using pre-configured API key from environment")
+
+# Add the default key
+API_TOKENS['default'] = DEFAULT_API_KEY
+
+# Authentication decorator
+def require_api_key(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        # Get API key from request
+        api_key = request.headers.get('X-API-Key')
+        
+        # Check if key exists and is valid
+        if not api_key or api_key not in API_TOKENS.values():
+            return make_response(jsonify({'error': 'Unauthorized - Invalid API Key'}), 401)
+            
+        return f(*args, **kwargs)
+    return decorated_function
 
 # Track active containers
 active_containers = {}
@@ -269,10 +350,16 @@ def get_container_by_identifier(container_identifier):
 def check_expired_containers():
     while True:
         try:
+            # Skip if Docker client is not available
+            if client is None:
+                logger.warning("Docker client not available, skipping container expiry check")
+                time.sleep(600)  # Sleep for 10 minutes
+                continue
+                
             current_time = time.time()
             expired = []
             
-            for container_id, info in active_containers.items():
+            for container_id, info in list(active_containers.items()):
                 creation_time = info.get('created_at', 0)
                 expiry_time = creation_time + (CONTAINER_EXPIRY_HOURS * 3600)
                 
@@ -283,11 +370,14 @@ def check_expired_containers():
             for container_id in expired:
                 try:
                     logger.info(f"Auto-removing expired container {container_id}")
-                    container_info = active_containers[container_id]
-                    container = container_info['container_obj']
-                    container.stop()
-                    container.remove()
-                    del active_containers[container_id]
+                    # Check if the container_id is still in active_containers
+                    if container_id in active_containers:
+                        container_info = active_containers[container_id]
+                        container = container_info.get('container_obj')
+                        if container:
+                            container.stop()
+                            container.remove()
+                        del active_containers[container_id]
                 except Exception as e:
                     logger.error(f"Failed to remove expired container {container_id}: {str(e)}")
                     
@@ -310,13 +400,23 @@ def handle_existing_containers():
         # Debug logs
         logger.info("Starting container tracking process...")
         
-        # Get all containers with our naming pattern (including stopped ones) - skip the manager itself
-        all_containers = client.containers.list(all=True, filters={"name": "ai-container-"})
-        logger.info(f"Found {len(all_containers)} containers with naming pattern 'ai-container-'")
-        
-        # Log all container names found
-        for c in all_containers:
-            logger.info(f"Container found: {c.name} (status: {c.status})")
+        # If Docker client is not available, we can't track containers
+        if client is None:
+            logger.error("Docker SDK client is not available. Cannot track containers.")
+            return
+            
+        all_containers = []
+        try:
+            # Use Docker SDK
+            all_containers = client.containers.list(all=True, filters={"name": "ai-container-"})
+            logger.info(f"Found {len(all_containers)} containers with naming pattern 'ai-container-'")
+            
+            # Log all container names found
+            for c in all_containers:
+                logger.info(f"Container found: {c.name} (status: {c.status})")
+        except Exception as e:
+            logger.error(f"Failed to list containers: {str(e)}")
+            return
             
         tracked_count = 0
         cleaned_count = 0
@@ -468,6 +568,7 @@ handle_existing_containers()
 
 @app.route('/api/containers', methods=['GET'])
 @app.route('/api/containers/list', methods=['GET'])  # Added alternative endpoint
+@require_api_key
 def list_containers():
     """List all active AI containers"""
     containers = []
@@ -519,9 +620,14 @@ def list_containers():
 
 @app.route('/api/containers', methods=['POST'])
 @app.route('/api/containers/create', methods=['POST'])  # Added alternative endpoint
+@require_api_key
 def create_container():
     """Create a new AI container"""
     try:
+        # Check if Docker client is available
+        if client is None:
+            return jsonify({'error': 'Docker client is not available. Container creation is not possible.'}), 500
+        
         # Generate a unique ID for this container
         container_id = str(uuid.uuid4())
         container_name = f"ai-container-{container_id[:8]}"
@@ -529,21 +635,25 @@ def create_container():
         # Find an available port for SSH
         ssh_port = find_available_port(11001, 12000)
         
-        # Create and start the container
+        # Create and start the container using Docker SDK
+        logger.info(f"Creating container '{container_name}' with SSH port {ssh_port}")
         container = client.containers.run(
             'ai-container-image:latest',  # The image should be built from the Dockerfile
             name=container_name,
             detach=True,
             ports={'22/tcp': ssh_port},
             volumes={
-                f'{container_name}-workspace': {'bind': '/workspace', 'mode': 'rw'},
-                '/home/jonflatt/.ssh': {'bind': '/root/.ssh', 'mode': 'ro'}  # Mount SSH directory read-only
+                f'{container_name}-workspace': {'bind': '/workspace', 'mode': 'rw'}
             },
             environment={
                 'CONTAINER_ID': container_id
             }
+            # Note: The container image uses root by default now
         )
-        
+            
+        if not container:
+            return jsonify({'error': 'Failed to create container'}), 500
+            
         # Store container info
         container_info = {
             'id': container_id,
@@ -555,16 +665,8 @@ def create_container():
         }
         active_containers[container_id] = container_info
         
-        # Try to set up SSH keys for the container
-        try:
-            logger.info(f"Setting up SSH keys for container {container_name}")
-            setup_result = setup_ssh_for_container(container_name)
-            if setup_result:
-                logger.info(f"SSH keys successfully configured for {container_name}")
-            else:
-                logger.warning(f"Failed to configure SSH keys for {container_name}")
-        except Exception as e:
-            logger.error(f"Error during SSH key setup for {container_name}: {str(e)}")
+        # Generate SSH command for easy access
+        ssh_command = f"ssh -p {ssh_port} root@localhost"
         
         # Return container details
         return jsonify({
@@ -572,7 +674,7 @@ def create_container():
             'name': container_name,
             'status': 'running',
             'ssh_port': ssh_port,
-            'ssh_command': f'ssh root@localhost -p {ssh_port}'
+            'ssh_command': ssh_command
         }), 201
         
     except Exception as e:
@@ -581,8 +683,13 @@ def create_container():
 
 @app.route('/api/containers/<container_id>', methods=['DELETE'])
 @app.route('/api/containers/delete/<container_id>', methods=['DELETE'])  # Added alternative endpoint
+@require_api_key
 def delete_container(container_id):
     """Stop and remove a container by ID or name"""
+    # Check if Docker client is available
+    if client is None:
+        return jsonify({'error': 'Docker client is not available. Container deletion is not possible.'}), 500
+    
     # Save original identifier for response messages
     original_id = container_id
     
@@ -602,6 +709,9 @@ def delete_container(container_id):
         if not container:
             return jsonify({'error': f'Container object not found for {original_id}'}), 500
             
+        # Log the container deletion attempt
+        logger.info(f"Attempting to delete container {container_info.get('name')} (ID: {container_id})")
+        
         # Stop and remove the container
         container.stop()
         container.remove()
@@ -622,6 +732,7 @@ def delete_container(container_id):
 
 @app.route('/api/containers/<container_id>/restart', methods=['POST'])
 @app.route('/api/containers/restart/<container_id>', methods=['POST'])  # Added alternative endpoint
+@require_api_key
 def restart_container(container_id):
     """Restart a specific container by ID or name"""
     # Save original identifier for response messages
@@ -687,6 +798,7 @@ def restart_container(container_id):
 
 @app.route('/api/containers/<container_id>/exec', methods=['POST'])
 @app.route('/api/containers/exec/<container_id>', methods=['POST'])  # Added alternative endpoint
+@require_api_key
 def exec_command(container_id):
     """Execute a command in a container by ID or name"""
     # Save original identifier for response messages
@@ -770,15 +882,22 @@ def exec_command(container_id):
 
 def find_available_port(start_port, end_port):
     """Find an available port in the given range"""
+    import socket
+    
     # Check if port is already in use by any container
     used_ports = set()
     for _, info in active_containers.items():
-        used_ports.add(info.get('ssh_port'))
+        ssh_port = info.get('ssh_port')
+        if ssh_port:
+            try:
+                used_ports.add(int(ssh_port))
+            except (ValueError, TypeError):
+                pass
     
     # Also check for ports in use by Docker
     try:
         # Get all containers (not just our managed ones)
-        all_containers = client.containers.list()
+        all_containers = client.containers.list(all=True)
         for container in all_containers:
             # Get port mappings
             container_info = client.api.inspect_container(container.id)
@@ -797,14 +916,26 @@ def find_available_port(start_port, end_port):
     except Exception as e:
         logger.warning(f"Error checking container ports: {str(e)}")
     
-    # Find first available port
+    # Check system ports using socket
     for port in range(start_port, end_port):
-        if port not in used_ports:
-            return port
+        # Skip if already identified as in use
+        if port in used_ports:
+            continue
+            
+        # Check if port is in use by the system
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                if s.connect_ex(('localhost', port)) != 0:
+                    # Port is available
+                    return port
+            except Exception:
+                # Skip ports that cause socket errors
+                continue
     
-    raise Exception("No available ports found")
+    raise Exception(f"No available ports found in range {start_port}-{end_port}")
 
 @app.route('/api/containers/refresh', methods=['GET', 'POST'])
+@require_api_key
 def refresh_containers():
     """Reset container tracking and rediscover all containers"""
     try:
@@ -858,6 +989,7 @@ def refresh_containers():
 
 @app.route('/api/containers/cleanup', methods=['POST'])
 @app.route('/api/cleanup', methods=['POST'])  # Added simpler alternative endpoint
+@require_api_key
 def cleanup_containers():
     """Stop and remove all containers"""
     try:
@@ -918,6 +1050,7 @@ def cleanup_containers():
 
 @app.route('/api/containers/stats', methods=['GET'])
 @app.route('/api/stats', methods=['GET'])  # Added simpler alternative endpoint
+@require_api_key
 def container_stats():
     """Get statistics about container usage"""
     try:
@@ -981,9 +1114,75 @@ def container_stats():
         logger.error(f"Failed to get container stats: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
+# API Key management
+@app.route('/api/key', methods=['POST'])
+@require_api_key
+def create_api_key():
+    """Create a new API key"""
+    try:
+        # Generate a new API key
+        key_name = request.json.get('name', f'key_{len(API_TOKENS)+1}')
+        new_key = generate_api_key()
+        
+        # Store the key
+        API_TOKENS[key_name] = new_key
+        
+        return jsonify({
+            'message': f'API key "{key_name}" created successfully',
+            'key_name': key_name,
+            'api_key': new_key
+        }), 201
+    except Exception as e:
+        logger.error(f"Failed to create API key: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/key/<key_name>', methods=['DELETE'])
+@require_api_key
+def delete_api_key(key_name):
+    """Delete an API key by name"""
+    try:
+        # Prevent deleting the default key
+        if key_name == 'default':
+            return jsonify({'error': 'Cannot delete the default API key'}), 400
+            
+        # Check if key exists
+        if key_name not in API_TOKENS:
+            return jsonify({'error': f'API key "{key_name}" not found'}), 404
+            
+        # Delete the key
+        del API_TOKENS[key_name]
+        
+        return jsonify({
+            'message': f'API key "{key_name}" deleted successfully',
+        }), 200
+    except Exception as e:
+        logger.error(f"Failed to delete API key: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/health', methods=['GET'])
+def health_check():
+    """Health check endpoint - no auth required"""
+    return jsonify({'status': 'healthy'}), 200
+
 if __name__ == '__main__':
     # When run directly, ensure shell builtins like 'cd' always work properly
     print("Starting AI Container Manager in standalone mode")
     print("Using direct Docker commands for container exec endpoint")
+    
+    if os.environ.get('API_KEY'):
+        print(f"Using API key from environment variable")
+    else:
+        print(f"Using generated API key: {DEFAULT_API_KEY}")
+        print("NOTE: This key will change each time the container restarts unless you set API_KEY environment variable")
+    
+    # Write the key to a secure file only readable by the app
+    key_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "api_key.txt")
+    try:
+        with open(key_file, 'w') as f:
+            f.write(DEFAULT_API_KEY)
+        os.chmod(key_file, 0o600)  # Make file readable only by owner
+        print(f"API key written to: {key_file}")
+    except Exception as e:
+        logger.error(f"Could not write API key to file: {str(e)}")
     
     app.run(host='0.0.0.0', port=5000, debug=True)

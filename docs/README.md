@@ -13,29 +13,48 @@ This service allows n8n AI agents to create, manage, and interact with Docker co
 - Container usage statistics and monitoring
 - Bulk container cleanup
 
+## Documentation
+
+- [Full Documentation](DOCUMENTATION.md)
+- [Quick Start Guide](QUICK_START.md)
+- [Docker SDK Compatibility Guide](DOCKER_SDK_COMPATIBILITY.md)
+- [Integration Guide](INTEGRATION_GUIDE.md)
+- [SSH Keys Setup](SSH_KEYS.md)
+
 ## Setup
 
-1. Build the container manager service:
+1. Ensure you have the correct requirements:
+   - Docker and Docker Compose
+   - docker-py 7.1.0 or higher and requests 2.32.2 (handled by our Dockerfile)
+
+2. Build the container manager service:
 
 ```bash
 cd ai_container_manager
 docker build -t ai-container-manager .
 ```
 
-2. Build the AI container image:
+3. Build the AI container image:
 
 ```bash
 cd ai_container_manager
 docker build -t ai-container-image -f Dockerfile.container .
 ```
 
-3. Start the container manager:
+4. Start the container manager:
 
 ```bash
 docker run -d --name ai-container-manager \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -p 5000:5000 \
+  -e DOCKER_HOST="unix:///var/run/docker.sock" \
   ai-container-manager
+```
+
+5. Verify Docker connection is successful:
+
+```bash
+docker logs ai-container-manager | grep "Docker connection"
 ```
 
 ## API Reference

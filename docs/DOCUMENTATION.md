@@ -29,6 +29,12 @@ Each container has its own isolated environment with persistent storage, making 
 
 - Docker and Docker Compose installed
 - n8n instance running (included in the docker-compose.yml)
+- Python package requirements:
+  - Flask 2.3.3
+  - Docker SDK for Python 7.1.0 (compatible with requests 2.32.2)
+  - Gunicorn 23.0.0
+  - PyJWT 2.10.1
+  - Requests 2.32.2
 
 ### Step 1: Clone the Repository
 
@@ -106,9 +112,74 @@ Should return an empty array `[]` if no containers are running.
 
 ## API Reference
 
+### Authentication
+
+All API endpoints (except `/api/health`) require authentication using an API key. 
+The API key must be provided in the `X-API-Key` header.
+
+Example:
+```
+curl -H "X-API-Key: YOUR_API_KEY" http://localhost:5000/api/containers
+```
+
+### API Key Management
+
+#### Create API Key
+
+**Endpoint:** `POST /api/key`
+
+**Headers:**
+- `X-API-Key`: Your existing API key
+
+**Request Body:**
+```json
+{
+  "name": "my-key-name"  // Optional, defaults to key_X
+}
+```
+
+**Response:**
+```json
+{
+  "message": "API key \"my-key-name\" created successfully",
+  "key_name": "my-key-name",
+  "api_key": "your-new-api-key"
+}
+```
+
+#### Delete API Key
+
+**Endpoint:** `DELETE /api/key/{key_name}`
+
+**Headers:**
+- `X-API-Key`: Your existing API key
+
+**Response:**
+```json
+{
+  "message": "API key \"my-key-name\" deleted successfully"
+}
+```
+
+#### Health Check
+
+**Endpoint:** `GET /api/health`
+
+This endpoint does not require authentication.
+
+**Response:**
+```json
+{
+  "status": "healthy"
+}
+```
+
 ### List Containers
 
 **Endpoint:** `GET /api/containers`
+
+**Headers:**
+- `X-API-Key`: Your API key
 
 **Response:**
 ```json
@@ -118,7 +189,7 @@ Should return an empty array `[]` if no containers are running.
     "name": "ai-container-3a4b1c8e",
     "status": "running",
     "created_at": 1647789012.345,
-    "ssh_port": 11001
+    "api_port": 11001
   }
 ]
 ```
@@ -127,6 +198,9 @@ Should return an empty array `[]` if no containers are running.
 
 **Endpoint:** `POST /api/containers`
 
+**Headers:**
+- `X-API-Key`: Your API key
+
 **Response:**
 ```json
 {
@@ -134,7 +208,7 @@ Should return an empty array `[]` if no containers are running.
   "name": "ai-container-3a4b1c8e",
   "status": "running",
   "ssh_port": 11001,
-  "ssh_command": "ssh root@localhost -p 11001"
+  "ssh_command": "ssh -p 11001 root@localhost"
 }
 ```
 
@@ -145,6 +219,9 @@ Should return an empty array `[]` if no containers are running.
 The `container_identifier` can be either:
 - The container ID (e.g., `3a4b1c8e-1234-5678-90ab-cdef12345678` or a shortened version)
 - The container name (e.g., `ai-container-3a4b1c8e` or just `3a4b1c8e`)
+
+**Headers:**
+- `X-API-Key`: Your API key
 
 **Response:**
 ```json
@@ -160,6 +237,9 @@ The `container_identifier` can be either:
 The `container_identifier` can be either:
 - The container ID (e.g., `3a4b1c8e-1234-5678-90ab-cdef12345678` or a shortened version)
 - The container name (e.g., `ai-container-3a4b1c8e` or just `3a4b1c8e`)
+
+**Headers:**
+- `X-API-Key`: Your API key
 
 **Request Body:**
 ```json
@@ -198,7 +278,14 @@ Example in JavaScript:
 // Execute a command with shell builtins
 const result = await $http.post(
   `http://ai-container-manager:5000/api/containers/${containerId}/exec`, 
-  { command: "/bin/bash -c 'cd /workspace && ls -la'" }
+  { 
+    command: "/bin/bash -c 'cd /workspace && ls -la'" 
+  },
+  {
+    headers: {
+      'X-API-Key': 'YOUR_API_KEY'
+    }
+  }
 );
 ```
 
@@ -207,6 +294,9 @@ const result = await $http.post(
 **Endpoint:** `GET /api/containers/stats`
 
 Returns statistics about container usage, including counts and age information.
+
+**Headers:**
+- `X-API-Key`: Your API key
 
 **Response:**
 ```json
@@ -229,6 +319,9 @@ Returns statistics about container usage, including counts and age information.
 **Endpoint:** `POST /api/containers/cleanup`
 
 Stops and removes all active containers.
+
+**Headers:**
+- `X-API-Key`: Your API key
 
 **Response:**
 ```json
@@ -313,27 +406,23 @@ return {
 };
 ```
 
-## SSH Access to Containers
+## API Access to Containers
 
 ### Connecting to a Container
 
-When a container is created, you'll receive SSH connection details:
+When a container is created, you'll receive API connection details:
 
 ```
-ssh root@localhost -p {ssh_port}
+http://localhost:{api_port}
 ```
 
-Default credentials:
-- Username: `root`
-- Password: `password`
+### Working with Container API
 
-### Working with Container Shell
-
-Once connected:
-- The working directory is `/workspace`
-- This is a persistent volume that survives container restarts
-- All installed tools are available (git, curl, python, etc.)
-- Use the shell as you would any Linux environment
+The container provides a RESTful API:
+- The container runs as the non-privileged `appuser`
+- The `/app/workspace` directory is a persistent volume that survives container restarts
+- Use the API as you would any web service
+- The API endpoints are secured with authentication
 
 ## Best Practices
 
@@ -343,11 +432,31 @@ Once connected:
 - Create a cleanup workflow that runs periodically to delete abandoned containers
 - Consider setting resource limits for containers in production
 
+### Docker SDK Configuration
+
+- Use compatible library versions:
+  - docker-py >= 7.1.0 is required with requests >= 2.32.2
+  - Check compatibility if upgrading either package
+- Always use the correct Docker socket format:
+  - Correct: `unix:///var/run/docker.sock` (triple slash)
+  - Incorrect: `unix://var/run/docker.sock` (double slash)
+- Set the DOCKER_HOST environment variable in your container:
+  ```bash
+  export DOCKER_HOST="unix:///var/run/docker.sock"
+  ```
+- Always mount the Docker socket when running the container:
+  ```bash
+  docker run -v /var/run/docker.sock:/var/run/docker.sock ...
+  ```
+
 ### Security
 
-- For production, modify the container image to use random passwords
-- Implement authentication for the API
-- Consider using a firewall to restrict access to SSH ports
+- All API endpoints are secured with API key authentication
+- The application stores API keys securely
+- The containers run as non-root users
+- No hardcoded passwords are used
+- Consider implementing a rate limiting solution
+- Use HTTPS in production environments
 
 ### Persistence
 
@@ -366,6 +475,33 @@ If container creation fails:
 3. Check Container Manager logs: `docker-compose logs ai-container-manager`
 4. Ensure the Docker socket is accessible: `ls -l /var/run/docker.sock`
 
+### Docker SDK Connection Issues
+
+If you see errors like "Not supported URL scheme http+docker":
+
+1. Check your Docker SDK and requests library versions:
+   ```bash
+   pip show docker requests
+   ```
+   
+2. Ensure compatible versions:
+   - docker-py >= 7.1.0 is required with requests >= 2.32.0
+   - The application uses docker==7.1.0 and requests==2.32.2
+   
+3. Verify the Docker socket URL format in your code:
+   - Correct: `unix:///var/run/docker.sock` (triple slash)
+   - Incorrect: `unix://var/run/docker.sock` (double slash)
+   
+4. Check the DOCKER_HOST environment variable:
+   ```bash
+   echo $DOCKER_HOST
+   ```
+   
+5. Try restarting the container with proper socket mounting:
+   ```bash
+   docker run -v /var/run/docker.sock:/var/run/docker.sock ...
+   ```
+
 ### API Connection Issues
 
 If you can't connect to the API:
@@ -374,13 +510,13 @@ If you can't connect to the API:
 2. Check if the port is accessible: `curl http://localhost:5000/api/containers`
 3. Check network configuration in docker-compose.yml
 
-### SSH Connection Problems
+### API Connection Problems
 
-If SSH connections fail:
+If API connections fail:
 
 1. Verify the container is running: `docker ps | grep ai-container`
-2. Check if the SSH port is mapped correctly: `docker port <container_name>`
-3. Try connecting with verbose output: `ssh -v root@localhost -p <port>`
+2. Check if the API port is mapped correctly: `docker port <container_name>`
+3. Try connecting with curl: `curl -H "X-API-Key: YOUR_API_KEY" http://localhost:<port>/api/health`
 4. Check container logs: `docker logs <container_name>`
 
 ### Command Execution Issues
